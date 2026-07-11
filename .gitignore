@@ -1,0 +1,27 @@
+# Dependências e builds
+node_modules/
+dist/
+generated/
+frontend/dist/
+backend/dist/
+backend/generated/
+
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+*credentials*.json
+**/drive-credentials.json
+**/config/drive-credentials.json
+
+# Logs e SO
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+.cursor/

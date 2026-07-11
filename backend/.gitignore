@@ -1,0 +1,5 @@
+node_modules
+dist
+generated
+config/drive-credentials.json
+.env

@@ -1,0 +1,70 @@
+// backend/prisma/schema.prisma — Schema do banco interno da aplicação (Neon PostgreSQL)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model AppSettings {
+  id                Int      @id @default(1)
+  dbType            String   @default("postgresql")
+  dbHost            String   @default("")
+  dbPort            Int      @default(5432)
+  dbName            String   @default("")
+  dbUser            String   @default("")
+  dbPassword        String   @default("")
+  googleCredentials String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Company {
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
+  color            String   @default("#4F8EF7")
+  googleFolderId   String
+  targetTable      String?
+  dateColumn       String?
+  compareColumn    String?
+  primaryKeyColumn String?
+  columnMapping    Json?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  spreadsheets     Spreadsheet[]
+}
+
+model Spreadsheet {
+  id                    String    @id @default(cuid())
+  companyId             String
+  company               Company   @relation(fields: [companyId], references: [id])
+  googleFileId          String
+  googleModifiedTime    DateTime?
+  fileName              String
+  totalRows             Int       @default(0)
+  newRows               Int       @default(0)
+  status                String    @default("pending")
+  sentAt                DateTime?
+  detectedAt            DateTime  @default(now())
+  rawData               String
+  previousSpreadsheetId String?
+  approvedBy            String?
+  sentBy                String?
+
+  @@index([companyId, detectedAt])
+  @@index([googleFileId])
+}
