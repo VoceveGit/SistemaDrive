@@ -15,7 +15,8 @@ Front e API no **mesmo** serviço: o Express serve o `frontend/dist` em produç�
 ### Build / Start no Render
 
 - **Root Directory:** (vazio — raiz do repo)
-- **Build Command:** `cd frontend && npm install --include=dev && npm run build && cd ../backend && npm install --include=dev && npm run build`
+- **Build Command:** `cd frontend && npm install && npm run build && cd ../backend && npm install && npm run build`
+- **Start Command:** `cd backend && npm start` (roda `prisma db push` e sobe a API — cria as tabelas no Neon na 1ª subida)
 - **Start Command:** `cd backend && npm start`
 
 Ou use o `render.yaml` na raiz.
