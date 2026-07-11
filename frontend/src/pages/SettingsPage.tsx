@@ -70,14 +70,6 @@ export function SettingsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const disconnectMutation = useMutation({
-    mutationFn: () => api("/settings/google/disconnect", { method: "POST" }),
-    onSuccess: () => {
-      toast.success("Google desconectado");
-      queryClient.invalidateQueries({ queryKey: ["settings"] });
-    },
-  });
-
   const settings = data?.settings;
 
   return (
