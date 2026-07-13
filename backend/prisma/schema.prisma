@@ -43,6 +43,8 @@ model Company {
   primaryKeyColumn String?
   columnMapping    Json?
   active           Boolean  @default(true)
+  /** Se true, planilhas novas/atualizadas são enviadas ao banco automaticamente */
+  autoSend         Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   spreadsheets     Spreadsheet[]

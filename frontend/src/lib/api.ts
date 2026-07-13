@@ -60,6 +60,7 @@ export type Company = {
   primaryKeyColumn: string | null;
   columnMapping: Record<string, string> | null;
   active: boolean;
+  autoSend?: boolean;
   totalSpreadsheets: number;
   pendingSpreadsheets: number;
   todaySpreadsheets: number;
@@ -73,7 +74,7 @@ export type Spreadsheet = {
   detectedAt: string;
   totalRows: number;
   newRows: number;
-  status: "pending" | "approved" | "sent" | "error";
+  status: "pending" | "approved" | "sent" | "error" | "no_new_items";
   sentAt?: string | null;
 };
 

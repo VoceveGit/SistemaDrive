@@ -65,7 +65,7 @@ export async function listAllCompanies(_req: Request, res: Response): Promise<vo
 
 export async function createCompany(req: Request, res: Response): Promise<void> {
   try {
-    const { name, color, googleFolderId, targetTable, dateColumn, compareColumn, primaryKeyColumn } =
+    const { name, color, googleFolderId, targetTable, dateColumn, compareColumn, primaryKeyColumn, autoSend } =
       req.body as {
       name?: string;
       color?: string;
@@ -74,6 +74,7 @@ export async function createCompany(req: Request, res: Response): Promise<void> 
       dateColumn?: string;
       compareColumn?: string;
       primaryKeyColumn?: string;
+      autoSend?: boolean;
     };
 
     if (!name || !googleFolderId) {
@@ -95,6 +96,7 @@ export async function createCompany(req: Request, res: Response): Promise<void> 
         dateColumn: dateColumn || null,
         compareColumn: compareColumn || null,
         primaryKeyColumn: primaryKeyColumn || null,
+        autoSend: autoSend ?? false,
       },
     });
 
@@ -118,6 +120,7 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
       primaryKeyColumn?: string;
       columnMapping?: Record<string, string>;
       active?: boolean;
+      autoSend?: boolean;
     };
 
     const company = await prisma.company.update({
@@ -134,6 +137,7 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
         ...(body.primaryKeyColumn !== undefined && { primaryKeyColumn: body.primaryKeyColumn }),
         ...(body.columnMapping !== undefined && { columnMapping: body.columnMapping }),
         ...(body.active !== undefined && { active: body.active }),
+        ...(body.autoSend !== undefined && { autoSend: body.autoSend }),
       },
     });
 

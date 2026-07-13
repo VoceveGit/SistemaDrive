@@ -1,0 +1,15 @@
+# Mantém o Render Free acordado (ping a cada 10 min)
+name: Keep Render Awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Despacho health
+        run: |
+          curl -fsS --max-time 60 "https://despacho-rtlg.onrender.com/api/health" || true

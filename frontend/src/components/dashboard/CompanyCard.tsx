@@ -18,8 +18,13 @@ export function CompanyCard({ company, onClick }: CompanyCardProps) {
       style={{ borderTopWidth: 4, borderTopColor: company.color }}
     >
       <div className="p-5">
-        <h3 className="text-lg font-semibold text-text-primary group-hover:text-accent-blue">
+        <h3 className="flex items-center gap-2 text-lg font-semibold text-text-primary group-hover:text-accent-blue">
           {company.name}
+          {company.autoSend && (
+            <span className="rounded-full bg-accent-green/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-green">
+              Auto
+            </span>
+          )}
         </h3>
 
         <div className="mt-4 grid grid-cols-2 gap-3">

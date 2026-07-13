@@ -12,6 +12,7 @@ import {
   computeDiffForSpreadsheet,
   parseRawData,
 } from "./diffService.js";
+import { processAutoSend } from "../controllers/spreadsheetsController.js";
 import type { Server as SocketServer } from "socket.io";
 
 const SPREADSHEET_MIMES = new Set([
@@ -307,6 +308,16 @@ async function pollCompanyFolder(
         companyName,
         fileName: file.name,
         spreadsheetId: spreadsheet.id,
+      });
+    }
+
+    if (company.autoSend) {
+      await processAutoSend({
+        spreadsheetId: spreadsheet.id,
+        companyId,
+        companyName,
+        fileName: file.name,
+        emit: (event, payload) => ioRef?.emit(event, payload),
       });
     }
   }

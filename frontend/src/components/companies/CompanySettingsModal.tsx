@@ -18,6 +18,7 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
   const [name, setName] = useState(company.name);
   const [color, setColor] = useState(company.color);
   const [googleFolderId, setGoogleFolderId] = useState(company.googleFolderId);
+  const [autoSend, setAutoSend] = useState(company.autoSend ?? false);
   const [targetTable, setTargetTable] = useState(company.targetTable ?? "");
   const [dateColumn, setDateColumn] = useState(company.dateColumn ?? "");
   const [compareColumn, setCompareColumn] = useState(company.compareColumn ?? "");
@@ -31,6 +32,7 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
           name,
           color,
           googleFolderId,
+          autoSend,
           targetTable: targetTable || null,
           dateColumn: dateColumn || null,
           compareColumn: compareColumn || null,
@@ -100,6 +102,21 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
                 value={googleFolderId}
                 onChange={setGoogleFolderId}
               />
+              <label className="flex items-start gap-3 rounded-lg border border-border bg-bg-card p-4">
+                <input
+                  type="checkbox"
+                  checked={autoSend}
+                  onChange={(e) => setAutoSend(e.target.checked)}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block font-medium text-text-primary">Envio automático</span>
+                  <span className="mt-1 block text-sm text-text-secondary">
+                    Ao detectar planilha nova/atualizada, compara com o banco e envia só o que falta.
+                    Em caso de erro, o automático desta empresa é desligado.
+                  </span>
+                </span>
+              </label>
             </>
           )}
 

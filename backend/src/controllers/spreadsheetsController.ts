@@ -60,7 +60,12 @@ export async function syncSpreadsheetStatusIfFullySent(
     where: { id: spreadsheetId },
     select: { id: true, status: true, sentAt: true },
   });
-  if (!spreadsheet || spreadsheet.status === "sent" || spreadsheet.status === "error") {
+  if (
+    !spreadsheet ||
+    spreadsheet.status === "sent" ||
+    spreadsheet.status === "error" ||
+    spreadsheet.status === "no_new_items"
+  ) {
     return false;
   }
 
@@ -145,7 +150,7 @@ export async function approveSpreadsheet(req: Request, res: Response): Promise<v
   }
 }
 
-async function sendRows(
+export async function sendRows(
   spreadsheetId: string,
   rowsToSend: string[][],
   userEmail?: string,
@@ -260,6 +265,87 @@ export async function sendSpreadsheet(req: Request, res: Response): Promise<void
       data: { status: "error" },
     }).catch(() => undefined);
     res.status(500).json({ success: false, error: message });
+  }
+}
+
+/**
+ * Processa envio automático de uma planilha recém-detectada.
+ * - 0 novos → status no_new_items
+ * - com novos → envia tudo e marca sent
+ * - erro → status error + desliga autoSend da empresa
+ */
+export async function processAutoSend(params: {
+  spreadsheetId: string;
+  companyId: string;
+  companyName: string;
+  fileName: string;
+  emit?: (event: string, payload: unknown) => void;
+}): Promise<"sent" | "no_new_items" | "error" | "skipped"> {
+  const { spreadsheetId, companyId, companyName, fileName, emit } = params;
+
+  const company = await prisma.company.findUnique({ where: { id: companyId } });
+  if (!company?.autoSend) return "skipped";
+
+  try {
+    const ctx = await loadSpreadsheetContext(spreadsheetId);
+    if (!ctx) throw new Error("Planilha não encontrada");
+
+    if (ctx.diff.summary.mustSend === 0) {
+      await prisma.spreadsheet.update({
+        where: { id: spreadsheetId },
+        data: { status: "no_new_items", newRows: 0 },
+      });
+      emit?.("spreadsheet_auto_processed", {
+        companyId,
+        companyName,
+        fileName,
+        spreadsheetId,
+        status: "no_new_items",
+        message: "Nenhum item novo para enviar",
+      });
+      return "no_new_items";
+    }
+
+    const rowsToSend = getMustSendRows(ctx.diff);
+    const result = await sendRows(spreadsheetId, rowsToSend, "sistema-automatico");
+
+    if (!result.completed) {
+      throw new Error(
+        `Envio automático incompleto: restaram ${result.report.mustSendRemaining} linha(s)`,
+      );
+    }
+
+    emit?.("spreadsheet_auto_processed", {
+      companyId,
+      companyName,
+      fileName,
+      spreadsheetId,
+      status: "sent",
+      insertedCount: result.insertedCount,
+      message: `${result.insertedCount} linha(s) enviadas automaticamente`,
+    });
+    return "sent";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Erro no envio automático";
+
+    await prisma.spreadsheet
+      .update({ where: { id: spreadsheetId }, data: { status: "error" } })
+      .catch(() => undefined);
+
+    await prisma.company
+      .update({ where: { id: companyId }, data: { autoSend: false } })
+      .catch(() => undefined);
+
+    emit?.("spreadsheet_auto_processed", {
+      companyId,
+      companyName,
+      fileName,
+      spreadsheetId,
+      status: "error",
+      autoSendDisabled: true,
+      message,
+    });
+    return "error";
   }
 }
 

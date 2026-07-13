@@ -18,6 +18,10 @@ const statusLabels: Record<string, { label: string; className: string }> = {
   approved: { label: "Aprovado", className: "bg-accent-blue/20 text-accent-blue" },
   sent: { label: "Enviado", className: "bg-accent-green/20 text-accent-green" },
   error: { label: "Erro", className: "bg-accent-red/20 text-accent-red" },
+  no_new_items: {
+    label: "Nenhum item novo",
+    className: "bg-accent-amber/20 text-accent-amber",
+  },
 };
 
 export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
