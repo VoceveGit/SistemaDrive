@@ -113,6 +113,18 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
     const id = paramId(req.params.id);
     const body = req.body as Record<string, unknown>;
 
+    const parseOptionalInt = (value: unknown): number | null => {
+      if (value === null || value === undefined || value === "") return null;
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 1) return null;
+      return Math.floor(n);
+    };
+
+    const toJsonOrDbNull = (value: unknown) => {
+      if (value === null) return Prisma.DbNull;
+      return value as Prisma.InputJsonValue;
+    };
+
     const company = await prisma.company.update({
       where: { id },
       data: {
@@ -134,16 +146,15 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
           primaryKeyColumn: body.primaryKeyColumn ? String(body.primaryKeyColumn) : null,
         }),
         ...(body.columnMapping !== undefined && {
-          columnMapping:
-            body.columnMapping === null
-              ? Prisma.JsonNull
-              : (body.columnMapping as Prisma.InputJsonValue),
+          columnMapping: toJsonOrDbNull(body.columnMapping),
         }),
         ...(body.active !== undefined && { active: Boolean(body.active) }),
         ...(body.autoSend !== undefined && { autoSend: Boolean(body.autoSend) }),
-        ...(body.headerRow !== undefined && { headerRow: Number(body.headerRow) || 1 }),
+        ...(body.headerRow !== undefined && {
+          headerRow: parseOptionalInt(body.headerRow) ?? 1,
+        }),
         ...(body.dataRow !== undefined && {
-          dataRow: body.dataRow === null || body.dataRow === "" ? null : Number(body.dataRow),
+          dataRow: parseOptionalInt(body.dataRow),
         }),
         ...(body.sheetName !== undefined && {
           sheetName: body.sheetName ? String(body.sheetName) : null,
@@ -151,10 +162,7 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
         ...(body.autofillEmpty !== undefined && { autofillEmpty: Boolean(body.autofillEmpty) }),
         ...(body.skipEmptyRows !== undefined && { skipEmptyRows: Boolean(body.skipEmptyRows) }),
         ...(body.ignoreRules !== undefined && {
-          ignoreRules:
-            body.ignoreRules === null
-              ? Prisma.JsonNull
-              : (body.ignoreRules as Prisma.InputJsonValue),
+          ignoreRules: toJsonOrDbNull(body.ignoreRules),
         }),
         ...(body.fileMode !== undefined && { fileMode: String(body.fileMode) }),
         ...(body.exactFileName !== undefined && {
@@ -167,6 +175,7 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
 
     res.json({ success: true, company });
   } catch (error) {
+    console.error("[updateCompany]", error);
     const message = error instanceof Error ? error.message : "Erro ao atualizar";
     res.status(500).json({ success: false, error: message });
   }

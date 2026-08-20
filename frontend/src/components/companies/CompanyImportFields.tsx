@@ -73,9 +73,11 @@ export function CompanyImportFields({
           <label className="block">
             <span className="mb-1.5 block text-sm text-text-secondary">Linha dos dados</span>
             <input
+              type="number"
+              min={1}
               className="input"
               value={dataRow}
-              placeholder="auto (título+1)"
+              placeholder="vazio = título+1"
               onChange={(e) => onChange({ dataRow: e.target.value })}
             />
           </label>
@@ -84,7 +86,7 @@ export function CompanyImportFields({
             <input
               className="input"
               value={sheetName}
-              placeholder="primeira aba"
+              placeholder="vazio = primeira aba"
               onChange={(e) => onChange({ sheetName: e.target.value })}
             />
           </label>
