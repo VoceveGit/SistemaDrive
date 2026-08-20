@@ -1,9 +1,9 @@
-# Mantém o Render Free acordado (ping a cada 10 min)
+# Mantém o Render Free acordado (ping a cada 14 min — evita 429)
 name: Keep Render Awake
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/14 * * * *"
   workflow_dispatch:
 
 jobs:

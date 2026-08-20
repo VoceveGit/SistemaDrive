@@ -12,7 +12,16 @@ import { SettingsPage } from "./pages/SettingsPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, staleTime: 5000 },
+    queries: {
+      retry: (count, error) => {
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("429") || msg.includes("muitas requisições")) return false;
+        return count < 1;
+      },
+      staleTime: 60_000,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    },
   },
 });
 

@@ -31,7 +31,7 @@ export function Header({ sidebarWidth }: HeaderProps) {
   const { data: connection } = useQuery({
     queryKey: ["connection-status"],
     queryFn: () => api<{ connected: boolean; message: string }>("/dashboard/connection"),
-    refetchInterval: 30000,
+    refetchInterval: 60_000,
   });
 
   useEffect(() => {

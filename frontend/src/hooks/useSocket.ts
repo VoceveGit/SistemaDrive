@@ -1,6 +1,6 @@
 // frontend/src/hooks/useSocket.ts — WebSocket para notificações
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { io } from "socket.io-client";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -26,17 +26,27 @@ export function useSocket() {
   const token = useAuthStore((s) => s.token);
   const queryClient = useQueryClient();
   const addNotification = useNotificationStore((s) => s.addNotification);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!token) return;
 
-    const socket = io(SOCKET_URL, { transports: ["websocket", "polling"] });
+    const socket = io(SOCKET_URL, {
+      transports: ["polling", "websocket"],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 3000,
+      reconnectionDelayMax: 30000,
+      randomizationFactor: 0.5,
+    });
 
-    const refreshCompany = (companyId: string) => {
-      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
-      queryClient.invalidateQueries({ queryKey: ["companies"] });
-      queryClient.invalidateQueries({ queryKey: ["companies-all"] });
-      queryClient.invalidateQueries({ queryKey: ["spreadsheets", companyId] });
+    const scheduleRefresh = (companyId: string) => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+        queryClient.invalidateQueries({ queryKey: ["companies"] });
+        queryClient.invalidateQueries({ queryKey: ["spreadsheets", companyId] });
+      }, 1500);
     };
 
     socket.on(
@@ -51,7 +61,7 @@ export function useSocket() {
         toast.success(`Nova planilha — ${payload.companyName}`, {
           description: payload.fileName,
         });
-        refreshCompany(payload.companyId);
+        scheduleRefresh(payload.companyId);
       },
     );
 
@@ -79,10 +89,11 @@ export function useSocket() {
         });
       }
 
-      refreshCompany(payload.companyId);
+      scheduleRefresh(payload.companyId);
     });
 
     return () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
       socket.disconnect();
     };
   }, [token, queryClient, addNotification]);
