@@ -1,10 +1,11 @@
-# Mantém o Render Free acordado (ping a cada 14 min — evita 429)
+# Keep-alive DESATIVADO — o ping frequente + o app geravam HTTP 429 no Render Free.
+# Para reativar depois (com plano melhor ou intervalo bem maior), descomente o schedule.
 name: Keep Render Awake
 
 on:
-  schedule:
-    - cron: "*/14 * * * *"
   workflow_dispatch:
+  # schedule:
+  #   - cron: "0 */2 * * *"
 
 jobs:
   ping:

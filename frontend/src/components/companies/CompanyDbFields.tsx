@@ -41,6 +41,7 @@ export function CompanyDbFields({
         ),
       enabled,
       retry: false,
+      staleTime: 5 * 60_000,
     });
 
   const { data: columnsData, isLoading: loadingColumns } = useQuery({
@@ -53,6 +54,7 @@ export function CompanyDbFields({
       ),
     enabled: enabled && Boolean(targetTable),
     retry: false,
+    staleTime: 5 * 60_000,
   });
 
   return (
