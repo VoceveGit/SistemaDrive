@@ -4,6 +4,7 @@ import mysql from "mysql2/promise";
 import pg from "pg";
 import type { AppSettings } from "../../generated/prisma/client.js";
 import type { RowDataPacket } from "mysql2";
+import { normalizeCell } from "../utils/hash.js";
 
 export type DbSettings = Pick<
   AppSettings,
@@ -344,6 +345,159 @@ export async function fetchLastDbRows(
   const result = await client.query(sql, params);
   await client.end();
   return result.rows;
+}
+
+/** Busca linhas do banco no mês/ano da data (1ª linha da planilha). */
+export async function fetchDbRowsByMonth(
+  settings: DbSettings,
+  tableName: string,
+  dateColumn: string,
+  year: number,
+  month: number,
+): Promise<Record<string, unknown>[]> {
+  if (settings.dbType === "mysql") {
+    const conn = await mysql.createConnection({
+      host: settings.dbHost,
+      port: settings.dbPort,
+      user: settings.dbUser,
+      password: settings.dbPassword,
+      database: settings.dbName,
+    });
+    const safeTable = `\`${tableName.replace(/`/g, "")}\``;
+    const safeCol = `\`${dateColumn.replace(/`/g, "")}\``;
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT * FROM ${safeTable}
+       WHERE YEAR(${safeCol}) = ? AND MONTH(${safeCol}) = ?`,
+      [year, month],
+    );
+    await conn.end();
+    return rows as Record<string, unknown>[];
+  }
+
+  const client = new pg.Client(buildPgConfig(settings));
+  await client.connect();
+  const safeTable = `"${tableName.replace(/"/g, "")}"`;
+  const safeCol = `"${dateColumn.replace(/"/g, "")}"`;
+  const result = await client.query(
+    `SELECT * FROM ${safeTable}
+     WHERE EXTRACT(YEAR FROM ${safeCol}) = $1 AND EXTRACT(MONTH FROM ${safeCol}) = $2`,
+    [year, month],
+  );
+  await client.end();
+  return result.rows;
+}
+
+/** Valores distintos de uma coluna (modo principal_only). */
+export async function fetchDistinctColumnValues(
+  settings: DbSettings,
+  tableName: string,
+  column: string,
+): Promise<Set<string>> {
+  if (settings.dbType === "mysql") {
+    const conn = await mysql.createConnection({
+      host: settings.dbHost,
+      port: settings.dbPort,
+      user: settings.dbUser,
+      password: settings.dbPassword,
+      database: settings.dbName,
+    });
+    const safeTable = `\`${tableName.replace(/`/g, "")}\``;
+    const safeCol = `\`${column.replace(/`/g, "")}\``;
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT DISTINCT ${safeCol} AS v FROM ${safeTable}`,
+    );
+    await conn.end();
+    return new Set(
+      rows.map((r) => normalizeCell(String(r.v ?? ""))).filter((v) => v !== ""),
+    );
+  }
+
+  const client = new pg.Client(buildPgConfig(settings));
+  await client.connect();
+  const safeTable = `"${tableName.replace(/"/g, "")}"`;
+  const safeCol = `"${column.replace(/"/g, "")}"`;
+  const result = await client.query(`SELECT DISTINCT ${safeCol} AS v FROM ${safeTable}`);
+  await client.end();
+  return new Set(
+    result.rows.map((r) => normalizeCell(String(r.v ?? ""))).filter((v) => v !== ""),
+  );
+}
+
+/** DELETE de todas as linhas (snapshot). Não DROP/TRUNCATE estrutura. */
+export async function clearTableRows(
+  settings: DbSettings,
+  tableName: string,
+): Promise<void> {
+  if (settings.dbType === "mysql") {
+    const conn = await mysql.createConnection({
+      host: settings.dbHost,
+      port: settings.dbPort,
+      user: settings.dbUser,
+      password: settings.dbPassword,
+      database: settings.dbName,
+    });
+    const safeTable = `\`${tableName.replace(/`/g, "")}\``;
+    await conn.query(`DELETE FROM ${safeTable}`);
+    await conn.end();
+    return;
+  }
+
+  const client = new pg.Client(buildPgConfig(settings));
+  await client.connect();
+  const safeTable = `"${tableName.replace(/"/g, "")}"`;
+  await client.query(`DELETE FROM ${safeTable}`);
+  await client.end();
+}
+
+/**
+ * UPDATE em cascata: aplica os valores das colunas alteradas
+ * em TODAS as linhas com o mesmo valor da coluna principal.
+ */
+export async function updateRowsByPrincipal(
+  settings: DbSettings,
+  tableName: string,
+  principalColumn: string,
+  principalValue: string,
+  setColumns: string[],
+  setValues: unknown[],
+): Promise<number> {
+  if (setColumns.length === 0) return 0;
+
+  if (settings.dbType === "mysql") {
+    const conn = await mysql.createConnection({
+      host: settings.dbHost,
+      port: settings.dbPort,
+      user: settings.dbUser,
+      password: settings.dbPassword,
+      database: settings.dbName,
+    });
+    const safeTable = `\`${tableName.replace(/`/g, "")}\``;
+    const safePrincipal = `\`${principalColumn.replace(/`/g, "")}\``;
+    const sets = setColumns
+      .map((c) => `\`${c.replace(/`/g, "")}\` = ?`)
+      .join(", ");
+    const [result] = await conn.query(
+      `UPDATE ${safeTable} SET ${sets} WHERE ${safePrincipal} = ?`,
+      [...setValues, principalValue],
+    );
+    await conn.end();
+    const affected = (result as { affectedRows?: number }).affectedRows ?? 0;
+    return affected;
+  }
+
+  const client = new pg.Client(buildPgConfig(settings));
+  await client.connect();
+  const safeTable = `"${tableName.replace(/"/g, "")}"`;
+  const safePrincipal = `"${principalColumn.replace(/"/g, "")}"`;
+  const sets = setColumns
+    .map((c, i) => `"${c.replace(/"/g, "")}" = $${i + 1}`)
+    .join(", ");
+  const result = await client.query(
+    `UPDATE ${safeTable} SET ${sets} WHERE ${safePrincipal} = $${setColumns.length + 1}`,
+    [...setValues, principalValue],
+  );
+  await client.end();
+  return result.rowCount ?? 0;
 }
 
 export async function countTableRows(

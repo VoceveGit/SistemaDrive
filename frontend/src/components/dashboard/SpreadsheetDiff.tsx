@@ -1,6 +1,6 @@
 // frontend/src/components/dashboard/SpreadsheetDiff.tsx
 
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Check, RefreshCw, Send } from "lucide-react";
@@ -103,7 +103,8 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
   if (!diff) return null;
 
   let mustSendCounter = -1;
-  const canSend = diff.summary.mustSend > 0;
+  const canSend =
+    diff.summary.mustSend > 0 || (diff.summary.mustUpdate ?? 0) > 0;
   const sending =
     sendAllMutation.isPending || sendOneMutation.isPending || sendSelectedMutation.isPending;
 
@@ -152,6 +153,12 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
               Inseridas agora:{" "}
               <strong className="text-accent-green">{lastReport.insertedCount}</strong>
             </li>
+            {(lastReport.updatedCount ?? 0) > 0 && (
+              <li>
+                Atualizadas:{" "}
+                <strong className="text-orange-400">{lastReport.updatedCount}</strong>
+              </li>
+            )}
             <li>
               Já no banco:{" "}
               <strong className="text-accent-amber">{lastReport.alreadyInDb}</strong>
@@ -173,6 +180,10 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Chip color="green" label={`${formatNumber(diff.summary.mustSend)} para enviar`} />
+        <Chip
+          color="amber"
+          label={`${formatNumber(diff.summary.mustUpdate ?? 0)} atualizar`}
+        />
         <Chip color="amber" label={`${formatNumber(diff.summary.alreadyInDb)} já no banco`} />
         <Chip
           color="neutral"
@@ -300,16 +311,19 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
             {diff.rows.map((row, rowIndex) => {
               const msIndex = row.mustSend ? ++mustSendCounter : -1;
               const isFirstInQueue = row.mustSend && msIndex === 0;
+              const isUpdated = Boolean(row.mustUpdate || row.isUpdated);
               return (
+                <Fragment key={rowIndex}>
                 <tr
-                  key={rowIndex}
                   className={cn(
                     "border-t border-border/50",
                     row.mustSend && "border-l-[3px] border-l-accent-green bg-accent-green/10",
                     isFirstInQueue && "ring-1 ring-inset ring-accent-blue/40",
+                    isUpdated && "border-l-[3px] border-l-orange-400 bg-orange-400/10",
                     row.isNew &&
                       !row.isNewInDb &&
                       !row.mustSend &&
+                      !isUpdated &&
                       "border-l-[3px] border-l-accent-amber bg-accent-amber/10",
                     selectMode &&
                       row.mustSend &&
@@ -343,7 +357,27 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
                         {isFirstInQueue ? "PRÓXIMO" : "NOVO"}
                       </span>
                     )}
-                    {row.isNew && !row.isNewInDb && !row.mustSend && (
+                    {isUpdated && (
+                      <details className="inline-block">
+                        <summary className="cursor-pointer list-none rounded bg-orange-400/20 px-2 py-0.5 text-xs text-orange-300">
+                          ATUALIZADO ▾
+                        </summary>
+                        <div className="absolute z-20 mt-1 max-w-sm rounded-lg border border-border bg-bg-card p-3 text-xs shadow-xl">
+                          {(row.changes ?? []).map((ch) => (
+                            <p key={ch.column} className="mb-1">
+                              <span className="font-medium text-text-primary">{ch.column}:</span>{" "}
+                              <span className="text-accent-amber">{ch.from || "—"}</span>
+                              {" → "}
+                              <span className="text-accent-green">{ch.to || "—"}</span>
+                            </p>
+                          ))}
+                          {(row.changes ?? []).length === 0 && (
+                            <p className="text-text-muted">Sem detalhe de campos</p>
+                          )}
+                        </div>
+                      </details>
+                    )}
+                    {row.isNew && !row.isNewInDb && !row.mustSend && !isUpdated && (
                       <span className="rounded bg-accent-amber/20 px-2 py-0.5 text-xs text-accent-amber">
                         JÁ NO BANCO
                       </span>
@@ -355,6 +389,7 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
                     </td>
                   ))}
                 </tr>
+                </Fragment>
               );
             })}
           </tbody>

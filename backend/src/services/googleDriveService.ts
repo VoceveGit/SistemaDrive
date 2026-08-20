@@ -4,7 +4,6 @@ import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import { google, type drive_v3 } from "googleapis";
-import * as XLSX from "xlsx";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import type { ParsedSpreadsheet } from "./diffService.js";
@@ -12,8 +11,10 @@ import {
   computeDiffForSpreadsheet,
   parseRawData,
 } from "./diffService.js";
+import { parseOptionsFromCompany, parseWorkbookBuffer } from "./sheetParseService.js";
 import { processAutoSend } from "../controllers/spreadsheetsController.js";
 import type { Server as SocketServer } from "socket.io";
+import type { Company } from "../../generated/prisma/client.js";
 
 const SPREADSHEET_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -172,30 +173,10 @@ async function getDriveClient(): Promise<drive_v3.Drive | null> {
   return getOAuthDrive();
 }
 
-function parseWorkbook(buffer: Buffer): ParsedSpreadsheet {
-  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  const json = XLSX.utils.sheet_to_json<(string | number | boolean | Date | null)[]>(sheet, {
-    header: 1,
-    defval: "",
-    raw: false,
-  });
-
-  if (json.length === 0) {
-    return { headers: [], rows: [] };
-  }
-
-  const headers = (json[0] ?? []).map(String);
-  const rows = json.slice(1).map((row) =>
-    headers.map((_, i) => String(row[i] ?? "")),
-  );
-  return { headers, rows };
-}
-
 async function downloadAndParse(
   drive: drive_v3.Drive,
   file: drive_v3.Schema$File,
+  company: Company,
 ): Promise<ParsedSpreadsheet> {
   const mime = file.mimeType ?? "";
   let buffer: Buffer;
@@ -214,7 +195,7 @@ async function downloadAndParse(
     buffer = Buffer.from(res.data as ArrayBuffer);
   }
 
-  return parseWorkbook(buffer);
+  return parseWorkbookBuffer(buffer, parseOptionsFromCompany(company));
 }
 
 export async function pollAllCompanies(): Promise<void> {
@@ -230,7 +211,7 @@ export async function pollAllCompanies(): Promise<void> {
 
   for (const company of companies) {
     try {
-      await pollCompanyFolder(drive, company.id, company.googleFolderId, company.name);
+      await pollCompanyFolder(drive, company);
     } catch (error) {
       console.error(`Erro ao monitorar pasta de ${company.name}:`, error);
     }
@@ -239,19 +220,26 @@ export async function pollAllCompanies(): Promise<void> {
 
 async function pollCompanyFolder(
   drive: drive_v3.Drive,
-  companyId: string,
-  folderId: string,
-  companyName: string,
+  company: Company,
 ): Promise<void> {
+  const companyId = company.id;
+  const companyName = company.name;
+  const folderId = company.googleFolderId;
+
   const response = await drive.files.list({
     q: `'${folderId}' in parents and trashed = false`,
     fields: "files(id, name, mimeType, modifiedTime)",
     pageSize: 100,
   });
 
-  const files = (response.data.files ?? []).filter(
+  let files = (response.data.files ?? []).filter(
     (f) => f.mimeType && SPREADSHEET_MIMES.has(f.mimeType),
   );
+
+  if (company.fileMode === "exact_name" && company.exactFileName) {
+    const wanted = company.exactFileName.trim().toLowerCase();
+    files = files.filter((f) => (f.name ?? "").trim().toLowerCase() === wanted);
+  }
 
   for (const file of files) {
     if (!file.id || !file.name) continue;
@@ -268,7 +256,7 @@ async function pollCompanyFolder(
       if (modifiedTime.getTime() <= lastModified) continue;
     }
 
-    const parsed = await downloadAndParse(drive, file);
+    const parsed = await downloadAndParse(drive, file, company);
 
     let previousData: ParsedSpreadsheet | null = null;
     if (existing) {
@@ -283,7 +271,6 @@ async function pollCompanyFolder(
       }
     }
 
-    const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } });
     const diff = await computeDiffForSpreadsheet(parsed, previousData, company);
 
     const previousSpreadsheetId = existing?.id ?? null;
@@ -296,6 +283,7 @@ async function pollCompanyFolder(
         fileName: file.name,
         totalRows: parsed.rows.length,
         newRows: diff.summary.mustSend,
+        updatedRows: diff.summary.mustUpdate ?? 0,
         status: "pending",
         rawData: JSON.stringify(parsed),
         previousSpreadsheetId,

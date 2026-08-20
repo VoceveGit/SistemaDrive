@@ -61,6 +61,16 @@ export type Company = {
   columnMapping: Record<string, string> | null;
   active: boolean;
   autoSend?: boolean;
+  headerRow?: number;
+  dataRow?: number | null;
+  sheetName?: string | null;
+  autofillEmpty?: boolean;
+  skipEmptyRows?: boolean;
+  ignoreRules?: { column: string; values: string[] } | null;
+  fileMode?: string;
+  exactFileName?: string | null;
+  syncMode?: string;
+  useDateFilter?: boolean;
   totalSpreadsheets: number;
   pendingSpreadsheets: number;
   todaySpreadsheets: number;
@@ -74,14 +84,24 @@ export type Spreadsheet = {
   detectedAt: string;
   totalRows: number;
   newRows: number;
+  updatedRows?: number;
   status: "pending" | "approved" | "sent" | "error" | "no_new_items";
   sentAt?: string | null;
+};
+
+export type FieldChange = {
+  column: string;
+  from: string;
+  to: string;
 };
 
 export type DiffRow = {
   isNew: boolean;
   isNewInDb: boolean;
   mustSend: boolean;
+  isUpdated?: boolean;
+  mustUpdate?: boolean;
+  changes?: FieldChange[];
   data: string[];
 };
 
@@ -94,21 +114,25 @@ export type DiffResult = {
     previousRows: number;
     alreadyInDb: number;
     mustSend: number;
+    mustUpdate?: number;
   };
   dbWindowDays: number;
   dateColumnUsed: string | null;
   compareColumnUsed: string | null;
   dbCompareLimit: number | null;
-  dbCompareMode: "date" | "last_records" | "skipped";
+  dbCompareMode: "date" | "month" | "last_records" | "principal" | "snapshot" | "skipped";
   dbCheckSkipped: boolean;
   skippedColumns: string[];
   dbRowsLoaded: number;
+  syncMode?: string;
 };
 
 export type SendReport = {
   spreadsheetRows: number;
   insertedCount: number;
+  updatedCount?: number;
   mustSendRemaining: number;
+  mustUpdateRemaining?: number;
   alreadyInDb: number;
   skippedColumns: string[];
   dbTableRowCount: number | null;

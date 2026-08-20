@@ -114,7 +114,7 @@ export function CompanyDbFields({
 
           <label className="block">
             <span className="mb-1.5 block text-sm text-text-secondary">
-              Campo comparativo <span className="text-text-muted">(opcional)</span>
+              Coluna principal <span className="text-text-muted">(opcional)</span>
             </span>
             <select
               value={compareColumn}
@@ -122,7 +122,7 @@ export function CompanyDbFields({
               className="input"
               disabled={loadingColumns}
             >
-              <option value="">Comparar linha inteira</option>
+              <option value="">Nenhuma</option>
               {columnsData?.columns.map((c) => (
                 <option key={c.column_name} value={c.column_name}>
                   {c.column_name} ({c.data_type})
@@ -130,7 +130,7 @@ export function CompanyDbFields({
               ))}
             </select>
             <p className="mt-1 text-xs text-text-muted">
-              Usado para detectar duplicatas no banco. Se vazio, compara todos os campos.
+              Usada nos modos UPDATE em cascata e “por coluna principal” (aba Importação).
             </p>
           </label>
 

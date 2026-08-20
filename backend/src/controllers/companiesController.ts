@@ -1,6 +1,7 @@
 // backend/src/controllers/companiesController.ts — CRUD de empresas
 
 import type { Request, Response } from "express";
+import { Prisma } from "../../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { slugify } from "../utils/slug.js";
 import { normalizeGoogleFolderId } from "../utils/googleFolder.js";
@@ -110,34 +111,57 @@ export async function createCompany(req: Request, res: Response): Promise<void> 
 export async function updateCompany(req: Request, res: Response): Promise<void> {
   try {
     const id = paramId(req.params.id);
-    const body = req.body as {
-      name?: string;
-      color?: string;
-      googleFolderId?: string;
-      targetTable?: string;
-      dateColumn?: string;
-      compareColumn?: string;
-      primaryKeyColumn?: string;
-      columnMapping?: Record<string, string>;
-      active?: boolean;
-      autoSend?: boolean;
-    };
+    const body = req.body as Record<string, unknown>;
 
     const company = await prisma.company.update({
       where: { id },
       data: {
-        ...(body.name !== undefined && { name: body.name }),
-        ...(body.color !== undefined && { color: body.color }),
+        ...(body.name !== undefined && { name: String(body.name) }),
+        ...(body.color !== undefined && { color: String(body.color) }),
         ...(body.googleFolderId !== undefined && {
-          googleFolderId: normalizeGoogleFolderId(body.googleFolderId),
+          googleFolderId: normalizeGoogleFolderId(String(body.googleFolderId)),
         }),
-        ...(body.targetTable !== undefined && { targetTable: body.targetTable }),
-        ...(body.dateColumn !== undefined && { dateColumn: body.dateColumn }),
-        ...(body.compareColumn !== undefined && { compareColumn: body.compareColumn }),
-        ...(body.primaryKeyColumn !== undefined && { primaryKeyColumn: body.primaryKeyColumn }),
-        ...(body.columnMapping !== undefined && { columnMapping: body.columnMapping }),
-        ...(body.active !== undefined && { active: body.active }),
-        ...(body.autoSend !== undefined && { autoSend: body.autoSend }),
+        ...(body.targetTable !== undefined && {
+          targetTable: body.targetTable ? String(body.targetTable) : null,
+        }),
+        ...(body.dateColumn !== undefined && {
+          dateColumn: body.dateColumn ? String(body.dateColumn) : null,
+        }),
+        ...(body.compareColumn !== undefined && {
+          compareColumn: body.compareColumn ? String(body.compareColumn) : null,
+        }),
+        ...(body.primaryKeyColumn !== undefined && {
+          primaryKeyColumn: body.primaryKeyColumn ? String(body.primaryKeyColumn) : null,
+        }),
+        ...(body.columnMapping !== undefined && {
+          columnMapping:
+            body.columnMapping === null
+              ? Prisma.JsonNull
+              : (body.columnMapping as Prisma.InputJsonValue),
+        }),
+        ...(body.active !== undefined && { active: Boolean(body.active) }),
+        ...(body.autoSend !== undefined && { autoSend: Boolean(body.autoSend) }),
+        ...(body.headerRow !== undefined && { headerRow: Number(body.headerRow) || 1 }),
+        ...(body.dataRow !== undefined && {
+          dataRow: body.dataRow === null || body.dataRow === "" ? null : Number(body.dataRow),
+        }),
+        ...(body.sheetName !== undefined && {
+          sheetName: body.sheetName ? String(body.sheetName) : null,
+        }),
+        ...(body.autofillEmpty !== undefined && { autofillEmpty: Boolean(body.autofillEmpty) }),
+        ...(body.skipEmptyRows !== undefined && { skipEmptyRows: Boolean(body.skipEmptyRows) }),
+        ...(body.ignoreRules !== undefined && {
+          ignoreRules:
+            body.ignoreRules === null
+              ? Prisma.JsonNull
+              : (body.ignoreRules as Prisma.InputJsonValue),
+        }),
+        ...(body.fileMode !== undefined && { fileMode: String(body.fileMode) }),
+        ...(body.exactFileName !== undefined && {
+          exactFileName: body.exactFileName ? String(body.exactFileName) : null,
+        }),
+        ...(body.syncMode !== undefined && { syncMode: String(body.syncMode) }),
+        ...(body.useDateFilter !== undefined && { useDateFilter: Boolean(body.useDateFilter) }),
       },
     });
 

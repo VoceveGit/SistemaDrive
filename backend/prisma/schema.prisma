@@ -39,12 +39,40 @@ model Company {
   googleFolderId   String
   targetTable      String?
   dateColumn       String?
+  /** Coluna principal (ex.: Pedido, numero) — usada em comparação/UPDATE */
   compareColumn    String?
   primaryKeyColumn String?
   columnMapping    Json?
   active           Boolean  @default(true)
   /** Se true, planilhas novas/atualizadas são enviadas ao banco automaticamente */
   autoSend         Boolean  @default(false)
+
+  /** Linha do cabeçalho (1-based). Default 1 = comportamento legado */
+  headerRow        Int      @default(1)
+  /** Linha inicial dos dados (1-based). Null = headerRow + 1 */
+  dataRow          Int?
+  /** Nome da aba; null = primeira aba */
+  sheetName        String?
+  autofillEmpty    Boolean  @default(false)
+  skipEmptyRows    Boolean  @default(true)
+  /** { column: string, values: string[] } — ignorar linhas cujo valor na coluna está na lista */
+  ignoreRules      Json?
+
+  /** exact_name | new_files */
+  fileMode         String   @default("new_files")
+  exactFileName    String?
+
+  /**
+   * incremental | incremental_update | principal_only | snapshot
+   * - incremental: só INSERT do que não existe (legado)
+   * - incremental_update: INSERT + UPDATE (cascata pela coluna principal)
+   * - principal_only: INSERT se valor da coluna principal não existe no banco
+   * - snapshot: limpa tabela e insere tudo
+   */
+  syncMode         String   @default("incremental")
+  /** Se true e dateColumn setada: filtra banco pelo mês da 1ª linha de dados */
+  useDateFilter    Boolean  @default(false)
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   spreadsheets     Spreadsheet[]
@@ -59,6 +87,7 @@ model Spreadsheet {
   fileName              String
   totalRows             Int       @default(0)
   newRows               Int       @default(0)
+  updatedRows           Int       @default(0)
   status                String    @default("pending")
   sentAt                DateTime?
   detectedAt            DateTime  @default(now())

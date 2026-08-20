@@ -7,14 +7,26 @@ import {
   computeDiffForSpreadsheet,
   getMustSendRows,
   getMustSendRowsByIndices,
+  getMustUpdateRows,
   parseRawData,
 } from "../services/diffService.js";
-import { getAppDbSettings, insertRows, countTableRows } from "../services/externalDbService.js";
+import {
+  clearTableRows,
+  getAppDbSettings,
+  insertRows,
+  countTableRows,
+  listColumns,
+  normalizeCellForInsert,
+  updateRowsByPrincipal,
+} from "../services/externalDbService.js";
+import { normalizeCell } from "../utils/hash.js";
 
 export type SendReport = {
   spreadsheetRows: number;
   insertedCount: number;
+  updatedCount: number;
   mustSendRemaining: number;
+  mustUpdateRemaining: number;
   alreadyInDb: number;
   skippedColumns: string[];
   dbTableRowCount: number | null;
@@ -70,7 +82,7 @@ export async function syncSpreadsheetStatusIfFullySent(
   }
 
   const ctx = await loadSpreadsheetContext(spreadsheetId);
-  if (!ctx || ctx.diff.summary.mustSend > 0) return false;
+  if (!ctx || ctx.diff.summary.mustSend > 0 || ctx.diff.summary.mustUpdate > 0) return false;
 
   await prisma.spreadsheet.update({
     where: { id: spreadsheetId },
@@ -154,8 +166,10 @@ export async function sendRows(
   spreadsheetId: string,
   rowsToSend: string[][],
   userEmail?: string,
+  options?: { applyUpdates?: boolean; isSnapshot?: boolean },
 ): Promise<{
   insertedCount: number;
+  updatedCount: number;
   rows: string[][];
   completed: boolean;
   report: SendReport;
@@ -165,6 +179,8 @@ export async function sendRows(
 
   const { spreadsheet, current, diff } = ctx;
   const company = spreadsheet.company;
+  const applyUpdates = options?.applyUpdates !== false;
+  const syncMode = company.syncMode || "incremental";
 
   if (!company.targetTable) {
     throw new Error("Tabela destino não configurada para esta empresa");
@@ -177,45 +193,116 @@ export async function sendRows(
 
   const mapping = company.columnMapping as Record<string, string> | null;
 
-  // Segurança: só insere o que o diff fresco ainda marca como pendente (evita duplicata)
+  if (syncMode === "snapshot" || options?.isSnapshot) {
+    await clearTableRows(dbSettings, company.targetTable);
+    const { headers, rows } = mapRowsForDb(current.headers, current.rows, mapping);
+    const { insertedCount, skippedColumns: insertSkipped } = await insertRows(
+      dbSettings,
+      company.targetTable,
+      headers,
+      rows,
+      null,
+    );
+    await prisma.spreadsheet.update({
+      where: { id: spreadsheetId },
+      data: { status: "sent", sentAt: new Date(), sentBy: userEmail, newRows: insertedCount, updatedRows: 0 },
+    });
+    const dbTableRowCount = await countTableRows(dbSettings, company.targetTable);
+    return {
+      insertedCount,
+      updatedCount: 0,
+      rows: current.rows,
+      completed: true,
+      report: {
+        spreadsheetRows: current.rows.length,
+        insertedCount,
+        updatedCount: 0,
+        mustSendRemaining: 0,
+        mustUpdateRemaining: 0,
+        alreadyInDb: 0,
+        skippedColumns: [...new Set([...insertSkipped, ...diff.skippedColumns])],
+        dbTableRowCount,
+        completed: true,
+      },
+    };
+  }
+
   const pendingRows = getMustSendRows(diff);
   const pendingKey = (row: string[]) => JSON.stringify(row);
   const pendingSet = new Set(pendingRows.map(pendingKey));
   const safeRows = rowsToSend.filter((row) => pendingSet.has(pendingKey(row)));
 
-  if (safeRows.length === 0) {
-    const dbTableRowCount = await countTableRows(dbSettings, company.targetTable);
-    return {
-      insertedCount: 0,
-      rows: [],
-      completed: diff.summary.mustSend === 0,
-      report: {
-        spreadsheetRows: current.rows.length,
-        insertedCount: 0,
-        mustSendRemaining: diff.summary.mustSend,
-        alreadyInDb: diff.summary.alreadyInDb,
-        skippedColumns: diff.skippedColumns,
-        dbTableRowCount,
-        completed: diff.summary.mustSend === 0,
-      },
-    };
+  let insertedCount = 0;
+  let insertSkipped: string[] = [];
+
+  if (safeRows.length > 0) {
+    const { headers, rows } = mapRowsForDb(current.headers, safeRows, mapping);
+    const result = await insertRows(
+      dbSettings,
+      company.targetTable,
+      headers,
+      rows,
+      company.primaryKeyColumn,
+    );
+    insertedCount = result.insertedCount;
+    insertSkipped = result.skippedColumns;
   }
 
-  const { headers, rows } = mapRowsForDb(current.headers, safeRows, mapping);
+  let updatedCount = 0;
+  if (applyUpdates && syncMode === "incremental_update" && company.compareColumn) {
+    const updateRows = getMustUpdateRows(diff);
+    const tableColumns = await listColumns(dbSettings, company.targetTable);
+    const columnByLower = new Map(tableColumns.map((c) => [c.column_name.toLowerCase(), c]));
 
-  const { insertedCount, skippedColumns: insertSkipped } = await insertRows(
-    dbSettings,
-    company.targetTable,
-    headers,
-    rows,
-    company.primaryKeyColumn,
-  );
+    const mappedPrincipal =
+      (mapping && mapping[company.compareColumn]) || company.compareColumn;
+    const principalHeader = current.headers.find(
+      (h) =>
+        h.toLowerCase() === company.compareColumn!.toLowerCase() ||
+        (mapping?.[h] ?? h).toLowerCase() === mappedPrincipal.toLowerCase(),
+    );
+
+    // Uma atualização por valor de chave principal (cascata)
+    const doneKeys = new Set<string>();
+    for (const row of updateRows) {
+      if (!principalHeader || row.changes.length === 0) continue;
+      const pIdx = current.headers.findIndex((h) => h === principalHeader);
+      const pVal = normalizeCell(row.data[pIdx] ?? "");
+      if (!pVal || doneKeys.has(pVal)) continue;
+      doneKeys.add(pVal);
+
+      const setColumns: string[] = [];
+      const setValues: unknown[] = [];
+      for (const ch of row.changes) {
+        const sheetCol = ch.column;
+        const dbColName =
+          mapping?.[sheetCol] ??
+          columnByLower.get(sheetCol.toLowerCase())?.column_name ??
+          sheetCol;
+        const colInfo = columnByLower.get(dbColName.toLowerCase());
+        if (!colInfo) continue;
+        if (colInfo.column_name.toLowerCase() === mappedPrincipal.toLowerCase()) continue;
+        setColumns.push(colInfo.column_name);
+        setValues.push(normalizeCellForInsert(ch.to, colInfo));
+      }
+      if (setColumns.length === 0) continue;
+      updatedCount += await updateRowsByPrincipal(
+        dbSettings,
+        company.targetTable,
+        columnByLower.get(mappedPrincipal.toLowerCase())?.column_name ?? mappedPrincipal,
+        pVal,
+        setColumns,
+        setValues,
+      );
+    }
+  }
 
   const afterCtx = await loadSpreadsheetContext(spreadsheetId);
   if (!afterCtx) throw new Error("Erro ao verificar status da planilha");
 
-  const remaining = afterCtx.diff.summary.mustSend;
-  const completed = remaining === 0;
+  const remainingSend = afterCtx.diff.summary.mustSend;
+  const remainingUpdate = afterCtx.diff.summary.mustUpdate;
+  const completed = remainingSend === 0 && remainingUpdate === 0;
 
   if (completed) {
     await prisma.spreadsheet.update({
@@ -236,14 +323,16 @@ export async function sendRows(
   const report: SendReport = {
     spreadsheetRows: current.rows.length,
     insertedCount,
-    mustSendRemaining: remaining,
+    updatedCount,
+    mustSendRemaining: remainingSend,
+    mustUpdateRemaining: remainingUpdate,
     alreadyInDb: afterCtx.diff.summary.alreadyInDb,
     skippedColumns,
     dbTableRowCount,
     completed,
   };
 
-  return { insertedCount, rows: safeRows, completed, report };
+  return { insertedCount, updatedCount, rows: safeRows, completed, report };
 }
 
 export async function sendSpreadsheet(req: Request, res: Response): Promise<void> {
@@ -256,7 +345,7 @@ export async function sendSpreadsheet(req: Request, res: Response): Promise<void
     }
 
     const rowsToSend = getMustSendRows(ctx.diff);
-    const result = await sendRows(id, rowsToSend, req.user?.email);
+    const result = await sendRows(id, rowsToSend, req.user?.email, { applyUpdates: true });
     res.json({ success: true, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro ao enviar";
@@ -290,10 +379,10 @@ export async function processAutoSend(params: {
     const ctx = await loadSpreadsheetContext(spreadsheetId);
     if (!ctx) throw new Error("Planilha não encontrada");
 
-    if (ctx.diff.summary.mustSend === 0) {
+    if (ctx.diff.summary.mustSend === 0 && ctx.diff.summary.mustUpdate === 0) {
       await prisma.spreadsheet.update({
         where: { id: spreadsheetId },
-        data: { status: "no_new_items", newRows: 0 },
+        data: { status: "no_new_items", newRows: 0, updatedRows: 0 },
       });
       emit?.("spreadsheet_auto_processed", {
         companyId,
@@ -307,11 +396,13 @@ export async function processAutoSend(params: {
     }
 
     const rowsToSend = getMustSendRows(ctx.diff);
-    const result = await sendRows(spreadsheetId, rowsToSend, "sistema-automatico");
+    const result = await sendRows(spreadsheetId, rowsToSend, "sistema-automatico", {
+      applyUpdates: true,
+    });
 
     if (!result.completed) {
       throw new Error(
-        `Envio automático incompleto: restaram ${result.report.mustSendRemaining} linha(s)`,
+        `Envio automático incompleto: restaram ${result.report.mustSendRemaining} nova(s) e ${result.report.mustUpdateRemaining} atualização(ões)`,
       );
     }
 
@@ -322,7 +413,7 @@ export async function processAutoSend(params: {
       spreadsheetId,
       status: "sent",
       insertedCount: result.insertedCount,
-      message: `${result.insertedCount} linha(s) enviadas automaticamente`,
+      message: `${result.insertedCount} inserida(s), ${result.updatedCount} atualizada(s)`,
     });
     return "sent";
   } catch (error) {

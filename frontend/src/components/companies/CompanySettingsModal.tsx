@@ -6,15 +6,33 @@ import { X } from "lucide-react";
 import { toast } from "sonner";
 import { api, type Company } from "../../lib/api";
 import { CompanyDbFields, confirmSaveWithoutDate } from "./CompanyDbFields";
+import {
+  CompanyImportFields,
+  type IgnoreRulesState,
+  type MappingPair,
+} from "./CompanyImportFields";
 
 type CompanySettingsModalProps = {
   company: Company;
   onClose: () => void;
 };
 
+function mappingToPairs(mapping: Record<string, string> | null | undefined): MappingPair[] {
+  if (!mapping) return [];
+  return Object.entries(mapping).map(([sheet, db]) => ({ sheet, db }));
+}
+
+function pairsToMapping(pairs: MappingPair[]): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  for (const p of pairs) {
+    if (p.sheet.trim() && p.db.trim()) out[p.sheet.trim()] = p.db.trim();
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export function CompanySettingsModal({ company, onClose }: CompanySettingsModalProps) {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"geral" | "banco">("geral");
+  const [tab, setTab] = useState<"geral" | "banco" | "importacao">("geral");
   const [name, setName] = useState(company.name);
   const [color, setColor] = useState(company.color);
   const [googleFolderId, setGoogleFolderId] = useState(company.googleFolderId);
@@ -23,6 +41,29 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
   const [dateColumn, setDateColumn] = useState(company.dateColumn ?? "");
   const [compareColumn, setCompareColumn] = useState(company.compareColumn ?? "");
   const [primaryKeyColumn, setPrimaryKeyColumn] = useState(company.primaryKeyColumn ?? "");
+
+  const [headerRow, setHeaderRow] = useState(company.headerRow ?? 1);
+  const [dataRow, setDataRow] = useState(
+    company.dataRow != null ? String(company.dataRow) : "",
+  );
+  const [sheetName, setSheetName] = useState(company.sheetName ?? "");
+  const [autofillEmpty, setAutofillEmpty] = useState(company.autofillEmpty ?? false);
+  const [skipEmptyRows, setSkipEmptyRows] = useState(company.skipEmptyRows !== false);
+  const [ignoreRules, setIgnoreRules] = useState<IgnoreRulesState>(() => {
+    const r = company.ignoreRules;
+    return {
+      enabled: Boolean(r?.column),
+      column: r?.column ?? "",
+      valuesText: r?.values?.join(", ") ?? "",
+    };
+  });
+  const [fileMode, setFileMode] = useState(company.fileMode ?? "new_files");
+  const [exactFileName, setExactFileName] = useState(company.exactFileName ?? "");
+  const [syncMode, setSyncMode] = useState(company.syncMode ?? "incremental");
+  const [useDateFilter, setUseDateFilter] = useState(company.useDateFilter ?? false);
+  const [columnMapping, setColumnMapping] = useState<MappingPair[]>(() =>
+    mappingToPairs(company.columnMapping),
+  );
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -37,6 +78,25 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
           dateColumn: dateColumn || null,
           compareColumn: compareColumn || null,
           primaryKeyColumn: primaryKeyColumn || null,
+          headerRow,
+          dataRow: dataRow.trim() ? Number(dataRow) : null,
+          sheetName: sheetName.trim() || null,
+          autofillEmpty,
+          skipEmptyRows,
+          ignoreRules: ignoreRules.enabled
+            ? {
+                column: ignoreRules.column.trim(),
+                values: ignoreRules.valuesText
+                  .split(",")
+                  .map((v) => v.trim())
+                  .filter(Boolean),
+              }
+            : null,
+          fileMode,
+          exactFileName: exactFileName.trim() || null,
+          syncMode,
+          useDateFilter,
+          columnMapping: pairsToMapping(columnMapping),
         }),
       }),
     onSuccess: () => {
@@ -57,9 +117,25 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
     mutation.mutate();
   };
 
+  const applyImportPatch = (patch: Record<string, unknown>) => {
+    if ("headerRow" in patch) setHeaderRow(Number(patch.headerRow) || 1);
+    if ("dataRow" in patch) setDataRow(String(patch.dataRow ?? ""));
+    if ("sheetName" in patch) setSheetName(String(patch.sheetName ?? ""));
+    if ("autofillEmpty" in patch) setAutofillEmpty(Boolean(patch.autofillEmpty));
+    if ("skipEmptyRows" in patch) setSkipEmptyRows(Boolean(patch.skipEmptyRows));
+    if ("ignoreRules" in patch) setIgnoreRules(patch.ignoreRules as IgnoreRulesState);
+    if ("fileMode" in patch) setFileMode(String(patch.fileMode));
+    if ("exactFileName" in patch) setExactFileName(String(patch.exactFileName ?? ""));
+    if ("syncMode" in patch) setSyncMode(String(patch.syncMode));
+    if ("useDateFilter" in patch) setUseDateFilter(Boolean(patch.useDateFilter));
+    if ("dateColumn" in patch) setDateColumn(String(patch.dateColumn ?? ""));
+    if ("compareColumn" in patch) setCompareColumn(String(patch.compareColumn ?? ""));
+    if ("columnMapping" in patch) setColumnMapping(patch.columnMapping as MappingPair[]);
+  };
+
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4">
-      <div className="max-h-[90vh] w-full max-w-lg overflow-hidden rounded-xl border border-border bg-bg-surface shadow-2xl">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-xl border border-border bg-bg-surface shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
           <h2 className="text-lg font-semibold">Configurar — {company.name}</h2>
           <button type="button" onClick={onClose} className="rounded-lg p-1 hover:bg-bg-card">
@@ -68,23 +144,29 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
         </div>
 
         <div className="flex border-b border-border">
-          {(["geral", "banco"] as const).map((t) => (
+          {(
+            [
+              ["geral", "Geral"],
+              ["banco", "Banco"],
+              ["importacao", "Importação"],
+            ] as const
+          ).map(([id, label]) => (
             <button
-              key={t}
+              key={id}
               type="button"
-              onClick={() => setTab(t)}
+              onClick={() => setTab(id)}
               className={`flex-1 px-4 py-3 text-sm font-medium ${
-                tab === t
+                tab === id
                   ? "border-b-2 border-accent-blue text-accent-blue"
                   : "text-text-secondary hover:text-text-primary"
               }`}
             >
-              {t === "geral" ? "Geral" : "Banco de Dados"}
+              {label}
             </button>
           ))}
         </div>
 
-        <div className="max-h-[50vh] space-y-4 overflow-auto p-6">
+        <div className="max-h-[55vh] space-y-4 overflow-auto p-6">
           {tab === "geral" && (
             <>
               <Input label="Nome" value={name} onChange={setName} />
@@ -98,7 +180,7 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
                 />
               </label>
               <Input
-                label="Pasta do Google Drive"
+                label="Pasta do Google Drive (link ou ID)"
                 value={googleFolderId}
                 onChange={setGoogleFolderId}
               />
@@ -112,8 +194,7 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
                 <span>
                   <span className="block font-medium text-text-primary">Envio automático</span>
                   <span className="mt-1 block text-sm text-text-secondary">
-                    Ao detectar planilha nova/atualizada, compara com o banco e envia só o que falta.
-                    Em caso de erro, o automático desta empresa é desligado.
+                    Ao detectar planilha, compara e envia. Em erro, desliga o automático.
                   </span>
                 </span>
               </label>
@@ -132,6 +213,27 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
               onCompareColumnChange={setCompareColumn}
               onPrimaryKeyColumnChange={setPrimaryKeyColumn}
               enabled={tab === "banco"}
+            />
+          )}
+
+          {tab === "importacao" && (
+            <CompanyImportFields
+              companyId={company.id}
+              targetTable={targetTable}
+              headerRow={headerRow}
+              dataRow={dataRow}
+              sheetName={sheetName}
+              autofillEmpty={autofillEmpty}
+              skipEmptyRows={skipEmptyRows}
+              ignoreRules={ignoreRules}
+              fileMode={fileMode}
+              exactFileName={exactFileName}
+              syncMode={syncMode}
+              useDateFilter={useDateFilter}
+              dateColumn={dateColumn}
+              compareColumn={compareColumn}
+              columnMapping={columnMapping}
+              onChange={applyImportPatch}
             />
           )}
         </div>
