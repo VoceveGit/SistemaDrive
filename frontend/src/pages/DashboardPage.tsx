@@ -19,13 +19,13 @@ export function DashboardPage() {
   const { data: stats } = useQuery({
     queryKey: ["dashboard-stats"],
     queryFn: () => api<DashboardStats & { success: boolean }>("/dashboard/stats"),
-    refetchInterval: 15000,
+    refetchInterval: 60_000,
   });
 
   const { data: companiesData, isLoading } = useQuery({
     queryKey: ["companies"],
     queryFn: () => api<{ companies: Company[] }>("/companies"),
-    refetchInterval: 15000,
+    refetchInterval: 60_000,
   });
 
   const companies = companiesData?.companies ?? [];

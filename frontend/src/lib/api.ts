@@ -20,15 +20,24 @@ export async function api<T>(
   }
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+
+  if (res.status === 429) {
+    throw new Error(
+      "Muitas requisições (429). O Render Free limitou o acesso — espere 1–2 minutos e atualize a página.",
+    );
+  }
+
   const text = await res.text();
-  let data: T & { success?: boolean; error?: string };
+  let data: T & { success?: boolean; error?: string; message?: string };
   try {
-    data = text ? (JSON.parse(text) as T & { success?: boolean; error?: string }) : ({} as T & { success?: boolean; error?: string });
+    data = text
+      ? (JSON.parse(text) as T & { success?: boolean; error?: string; message?: string })
+      : ({} as T & { success?: boolean; error?: string; message?: string });
   } catch {
     throw new Error(
       res.ok
         ? "Resposta inválida do servidor"
-        : "Backend offline ou sem resposta. Verifique se a API está rodando na porta 3001.",
+        : `Servidor indisponível (HTTP ${res.status}). Tente de novo em instantes.`,
     );
   }
 
@@ -40,7 +49,8 @@ export async function api<T>(
   }
 
   if (!res.ok) {
-    throw new Error((data as { error?: string }).error ?? `Erro HTTP ${res.status}`);
+    const err = data as { error?: string; message?: string };
+    throw new Error(err.error ?? err.message ?? `Erro HTTP ${res.status}`);
   }
 
   return data;
