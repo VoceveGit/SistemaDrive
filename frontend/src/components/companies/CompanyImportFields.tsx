@@ -52,6 +52,8 @@ export function CompanyImportFields({
   onChange,
 }: Props) {
   const [loadColumns, setLoadColumns] = useState(false);
+  const [loadSheetHeaders, setLoadSheetHeaders] = useState(false);
+
   const { data: columnsData } = useQuery({
     queryKey: ["columns", companyId, targetTable],
     queryFn: () =>
@@ -63,7 +65,20 @@ export function CompanyImportFields({
     staleTime: 5 * 60_000,
   });
 
+  const { data: sheetHeadersData } = useQuery({
+    queryKey: ["sheet-headers", companyId],
+    queryFn: () =>
+      api<{
+        columns: { index: number; letter: string; name: string; label: string }[];
+        fileName: string | null;
+      }>(`/companies/${companyId}/sheet-headers`),
+    enabled: loadSheetHeaders,
+    retry: false,
+    staleTime: 60_000,
+  });
+
   const columns = columnsData?.columns ?? [];
+  const sheetColumns = sheetHeadersData?.columns ?? [];
 
   return (
     <div className="space-y-6">
@@ -268,20 +283,51 @@ export function CompanyImportFields({
           Mapeamento de colunas <span className="font-normal text-text-muted">(opcional)</span>
         </h3>
         <p className="text-xs text-text-muted">
-          Só para exceções (ex.: Quant. Pedida → Quant._x000D_Pedida).
+          Use quando o nome na planilha ≠ banco, ou quando há nomes repetidos (ex.: dois &quot;Nome&quot;).
+          Prefira a <strong className="font-medium text-text-secondary">letra da coluna</strong>{" "}
+          (AC, AF…) — assim cada posição fica única.
         </p>
+        <button
+          type="button"
+          className="btn-secondary text-sm"
+          onClick={() => setLoadSheetHeaders(true)}
+        >
+          Carregar colunas da última planilha
+        </button>
+        {sheetHeadersData?.fileName && (
+          <p className="text-xs text-text-muted">Fonte: {sheetHeadersData.fileName}</p>
+        )}
         {columnMapping.map((pair, idx) => (
           <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2">
-            <input
-              className="input"
-              placeholder="Planilha"
-              value={pair.sheet}
-              onChange={(e) => {
-                const next = [...columnMapping];
-                next[idx] = { ...pair, sheet: e.target.value };
-                onChange({ columnMapping: next });
-              }}
-            />
+            {sheetColumns.length > 0 ? (
+              <select
+                className="input"
+                value={pair.sheet}
+                onChange={(e) => {
+                  const next = [...columnMapping];
+                  next[idx] = { ...pair, sheet: e.target.value };
+                  onChange({ columnMapping: next });
+                }}
+              >
+                <option value="">Coluna na planilha</option>
+                {sheetColumns.map((c) => (
+                  <option key={c.letter} value={c.letter}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="input"
+                placeholder="Letra ou nome (ex: AF)"
+                value={pair.sheet}
+                onChange={(e) => {
+                  const next = [...columnMapping];
+                  next[idx] = { ...pair, sheet: e.target.value };
+                  onChange({ columnMapping: next });
+                }}
+              />
+            )}
             <select
               className="input"
               value={pair.db}

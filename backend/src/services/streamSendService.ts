@@ -20,6 +20,7 @@ import {
   clearStagingJob,
   forEachStagingBatch,
 } from "./stagingService.js";
+import { mapRowsWithColumnMapping } from "../utils/columnMapping.js";
 
 const BATCH_SIZE = 500;
 
@@ -28,21 +29,7 @@ function mapRows(
   rows: string[][],
   mapping: Record<string, string> | null,
 ): { headers: string[]; rows: string[][] } {
-  if (!mapping) return { headers, rows };
-  const mappedHeaders: string[] = [];
-  const indices: number[] = [];
-  headers.forEach((h, i) => {
-    const target = mapping[h];
-    if (target) {
-      mappedHeaders.push(target);
-      indices.push(i);
-    }
-  });
-  if (mappedHeaders.length === 0) return { headers, rows };
-  return {
-    headers: mappedHeaders,
-    rows: rows.map((row) => indices.map((i) => row[i] ?? "")),
-  };
+  return mapRowsWithColumnMapping(headers, rows, mapping);
 }
 
 type RawMeta = {

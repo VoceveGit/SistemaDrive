@@ -265,6 +265,45 @@ export async function getCompanySpreadsheets(req: Request, res: Response): Promi
   res.json({ success: true, spreadsheets });
 }
 
+/** Cabeçalhos da última planilha (leve) — para dropdown de mapeamento com letra Excel. */
+export async function getCompanySheetHeaders(req: Request, res: Response): Promise<void> {
+  try {
+    const id = paramId(req.params.id);
+    const sheet = await prisma.spreadsheet.findFirst({
+      where: { companyId: id },
+      orderBy: { detectedAt: "desc" },
+      select: { id: true, fileName: true, rawData: true },
+    });
+    if (!sheet) {
+      res.json({ success: true, headers: [], fileName: null });
+      return;
+    }
+    let headers: string[] = [];
+    try {
+      const parsed = JSON.parse(sheet.rawData) as { headers?: string[] };
+      headers = Array.isArray(parsed.headers) ? parsed.headers : [];
+    } catch {
+      headers = [];
+    }
+    const { indexToExcelLetter } = await import("../utils/columnMapping.js");
+    const columns = headers.map((name, index) => ({
+      index,
+      letter: indexToExcelLetter(index),
+      name,
+      label: `${indexToExcelLetter(index)} — ${name || "(vazio)"}`,
+    }));
+    res.json({
+      success: true,
+      spreadsheetId: sheet.id,
+      fileName: sheet.fileName,
+      columns,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Erro ao ler cabeçalhos";
+    res.status(500).json({ success: false, error: message });
+  }
+}
+
 export async function getCompany(req: Request, res: Response): Promise<void> {
   const id = paramId(req.params.id);
   const company = await prisma.company.findUnique({ where: { id } });

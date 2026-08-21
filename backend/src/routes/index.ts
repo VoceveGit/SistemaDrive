@@ -23,6 +23,7 @@ import {
   getTablesPreview,
   getColumnsPreview,
   getCompanySpreadsheets,
+  getCompanySheetHeaders,
   getCompany,
 } from "../controllers/companiesController.js";
 import {
@@ -67,6 +68,7 @@ router.delete("/companies/:id", deleteCompany);
 router.get("/companies/:id/tables", getCompanyTables);
 router.get("/companies/:id/columns", getCompanyColumns);
 router.get("/companies/:id/spreadsheets", getCompanySpreadsheets);
+router.get("/companies/:id/sheet-headers", getCompanySheetHeaders);
 
 router.get("/spreadsheets/:id/diff", getDiff);
 router.post("/spreadsheets/:id/process", processSpreadsheet);

@@ -2,6 +2,7 @@
 
 import type { Company } from "../../generated/prisma/client.js";
 import { hashRow, normalizeCell } from "../utils/hash.js";
+import { applyColumnMapping } from "../utils/columnMapping.js";
 import {
   DB_COMPARE_LIMIT,
   fetchDbRowsByMonth,
@@ -59,11 +60,6 @@ export type DiffResult = {
 };
 
 type ColumnMapping = Record<string, string>;
-
-function applyColumnMapping(headers: string[], mapping?: ColumnMapping | null): string[] {
-  if (!mapping) return headers;
-  return headers.map((h) => mapping[h] ?? h);
-}
 
 function filterHeadersToTable(
   headers: string[],

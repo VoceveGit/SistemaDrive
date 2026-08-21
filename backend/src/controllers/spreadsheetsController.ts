@@ -20,6 +20,7 @@ import {
   updateRowsByPrincipal,
 } from "../services/externalDbService.js";
 import { normalizeCell } from "../utils/hash.js";
+import { mapRowsWithColumnMapping } from "../utils/columnMapping.js";
 
 export type SendReport = {
   spreadsheetRows: number;
@@ -99,11 +100,7 @@ function mapHeadersForDb(
   headers: string[],
   mapping: Record<string, string> | null | undefined,
 ): string[] {
-  if (!mapping) return headers;
-  return headers.map((h) => mapping[h] ?? h).filter((h, i, arr) => {
-    const sourceHeader = headers[i];
-    return mapping[sourceHeader] !== undefined || !Object.values(mapping).includes(h);
-  });
+  return mapRowsWithColumnMapping(headers, [], mapping).headers;
 }
 
 function mapRowsForDb(
@@ -111,26 +108,7 @@ function mapRowsForDb(
   rows: string[][],
   mapping: Record<string, string> | null | undefined,
 ): { headers: string[]; rows: string[][] } {
-  if (!mapping) return { headers, rows };
-
-  const mappedHeaders: string[] = [];
-  const indices: number[] = [];
-  const usedTargets = new Set<string>();
-
-  headers.forEach((h, i) => {
-    const target = mapping[h];
-    if (!target) return;
-    const key = target.toLowerCase().trim();
-    if (usedTargets.has(key)) return; // evita destino duplicado (ex.: Nome 2x)
-    usedTargets.add(key);
-    mappedHeaders.push(target);
-    indices.push(i);
-  });
-
-  if (mappedHeaders.length === 0) return { headers, rows };
-
-  const mappedRows = rows.map((row) => indices.map((i) => row[i] ?? ""));
-  return { headers: mappedHeaders, rows: mappedRows };
+  return mapRowsWithColumnMapping(headers, rows, mapping);
 }
 
 export async function getDiff(req: Request, res: Response): Promise<void> {
