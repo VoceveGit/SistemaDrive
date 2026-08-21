@@ -137,6 +137,9 @@ export type DiffResult = {
   skippedColumns: string[];
   dbRowsLoaded: number;
   syncMode?: string;
+  truncated?: boolean;
+  note?: string;
+  processMessage?: string | null;
 };
 
 export type SendReport = {

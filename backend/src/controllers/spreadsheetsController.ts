@@ -138,7 +138,25 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
       res.status(404).json({ success: false, error: "Planilha não encontrada" });
       return;
     }
-    res.json({ success: true, ...ctx.diff });
+    let truncated = false;
+    let note: string | undefined;
+    try {
+      const raw = JSON.parse(ctx.spreadsheet.rawData) as {
+        truncated?: boolean;
+        note?: string;
+      };
+      truncated = Boolean(raw.truncated);
+      note = raw.note;
+    } catch {
+      /* ignore */
+    }
+    res.json({
+      success: true,
+      ...ctx.diff,
+      truncated,
+      note,
+      processMessage: ctx.spreadsheet.processMessage,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro ao calcular diff";
     res.status(500).json({ success: false, error: message });
@@ -341,6 +359,41 @@ export async function sendSpreadsheet(req: Request, res: Response): Promise<void
     const ctx = await loadSpreadsheetContext(id);
     if (!ctx) {
       res.status(404).json({ success: false, error: "Planilha não encontrada" });
+      return;
+    }
+
+    let truncated = false;
+    try {
+      const raw = JSON.parse(ctx.spreadsheet.rawData) as { truncated?: boolean };
+      truncated = Boolean(raw.truncated);
+    } catch {
+      /* ignore */
+    }
+
+    // Preview truncado: rebaixa o arquivo e envia tudo em streaming (só agora, após validação)
+    if (truncated || ctx.spreadsheet.totalRows > 4000) {
+      const { streamSendFromDrive } = await import("../services/streamSendService.js");
+      const result = await streamSendFromDrive({
+        spreadsheetId: id,
+        userEmail: req.user?.email,
+      });
+      res.json({
+        success: true,
+        insertedCount: result.insertedCount,
+        updatedCount: 0,
+        completed: true,
+        report: {
+          spreadsheetRows: result.totalRows,
+          insertedCount: result.insertedCount,
+          updatedCount: 0,
+          mustSendRemaining: 0,
+          mustUpdateRemaining: 0,
+          alreadyInDb: 0,
+          skippedColumns: [],
+          dbTableRowCount: null,
+          completed: true,
+        },
+      });
       return;
     }
 

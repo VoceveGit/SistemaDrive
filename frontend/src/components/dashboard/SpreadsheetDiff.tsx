@@ -222,6 +222,16 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
         )}
       </div>
 
+      {(diff.truncated || diff.note) && (
+        <div className="mb-4 rounded-lg border border-accent-amber/40 bg-accent-amber/10 px-4 py-3 text-sm text-text-primary">
+          <p className="font-medium text-accent-amber">Preview parcial — nada foi enviado ao banco ainda</p>
+          <p className="mt-1 text-xs text-text-secondary">
+            {diff.note ??
+              "Confira se o cabeçalho e as primeiras linhas estão corretos. O envio completo só roda quando você clicar em Enviar todos."}
+          </p>
+        </div>
+      )}
+
       {canSend ? (
         <div className="mb-4 rounded-lg border border-border bg-bg-card p-4">
           <p className="mb-3 text-xs text-text-secondary">

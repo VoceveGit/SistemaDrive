@@ -167,6 +167,11 @@ async function getDriveClient(): Promise<drive_v3.Drive | null> {
   return getOAuthDrive();
 }
 
+/** Cliente Drive para reprocessar/enviar a partir do arquivo original. */
+export async function getDriveClientForImport(): Promise<drive_v3.Drive | null> {
+  return getDriveClient();
+}
+
 export async function pollAllCompanies(): Promise<void> {
   const drive = await getDriveClient();
   if (!drive) {
