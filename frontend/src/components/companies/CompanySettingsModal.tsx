@@ -57,7 +57,7 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
       valuesText: r?.values?.join(", ") ?? "",
     };
   });
-  const [fileMode, setFileMode] = useState(company.fileMode ?? "new_files");
+  const [fileMode, setFileMode] = useState(company.fileMode ?? "latest_only");
   const [exactFileName, setExactFileName] = useState(company.exactFileName ?? "");
   const [syncMode, setSyncMode] = useState(company.syncMode ?? "incremental");
   const [useDateFilter, setUseDateFilter] = useState(company.useDateFilter ?? false);

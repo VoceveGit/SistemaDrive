@@ -1,4 +1,4 @@
-// frontend/src/hooks/useSocket.ts — WebSocket para notificações (sem loop de reconnect)
+// frontend/src/hooks/useSocket.ts — Notificações em tempo real (desligado em produção Free)
 
 import { useEffect, useRef } from "react";
 import { io, type Socket } from "socket.io-client";
@@ -11,6 +11,9 @@ const SOCKET_URL =
   import.meta.env.VITE_SOCKET_URL ??
   (import.meta.env.PROD ? window.location.origin : "http://localhost:3001");
 
+/** Em produção no Render Free o Socket.io gera 429/502 — usamos só refetch do dashboard. */
+const SOCKET_ENABLED = import.meta.env.DEV === true;
+
 type AutoProcessedPayload = {
   companyId: string;
   companyName: string;
@@ -22,7 +25,6 @@ type AutoProcessedPayload = {
   insertedCount?: number;
 };
 
-/** Em produção Free: sem reconnect automático (evita tempestade de 429). */
 export function useSocket() {
   const token = useAuthStore((s) => s.token);
   const queryClient = useQueryClient();
@@ -31,9 +33,8 @@ export function useSocket() {
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
-    if (!token) return;
+    if (!SOCKET_ENABLED || !token) return;
 
-    // Aguarda um pouco após o load pra não competir com as queries iniciais
     const startTimer = setTimeout(() => {
       if (socketRef.current) return;
 
@@ -41,7 +42,6 @@ export function useSocket() {
         transports: ["polling"],
         upgrade: false,
         reconnection: false,
-        autoConnect: true,
         timeout: 20000,
       });
       socketRef.current = socket;

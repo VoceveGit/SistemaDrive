@@ -155,9 +155,13 @@ export function CompanyImportFields({
             value={fileMode}
             onChange={(e) => onChange({ fileMode: e.target.value })}
           >
-            <option value="new_files">Processar arquivos novos da pasta</option>
+            <option value="latest_only">Só o arquivo mais recente da pasta</option>
+            <option value="new_files">Todos os arquivos novos da pasta</option>
             <option value="exact_name">Nome exato</option>
           </select>
+          <p className="text-xs text-text-muted">
+            No Render Free, use &quot;mais recente&quot; — processa só a última planilha e evita sobrecarga.
+          </p>
         </label>
         {fileMode === "exact_name" && (
           <label className="block">

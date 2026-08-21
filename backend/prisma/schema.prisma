@@ -58,8 +58,8 @@ model Company {
   /** { column: string, values: string[] } — ignorar linhas cujo valor na coluna está na lista */
   ignoreRules      Json?
 
-  /** exact_name | new_files */
-  fileMode         String   @default("new_files")
+  /** exact_name | new_files | latest_only */
+  fileMode         String   @default("latest_only")
   exactFileName    String?
 
   /**

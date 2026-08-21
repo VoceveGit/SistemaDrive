@@ -54,7 +54,7 @@ async function main() {
 
   await seedAdmin();
 
-  cron.schedule("*/2 * * * *", () => {
+  cron.schedule("*/5 * * * *", () => {
     pollAllCompanies().catch((err) => console.error("Erro no polling:", err));
   });
 

@@ -241,6 +241,19 @@ async function pollCompanyFolder(
     files = files.filter((f) => (f.name ?? "").trim().toLowerCase() === wanted);
   }
 
+  // Mais recente primeiro
+  files.sort((a, b) => {
+    const ta = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+    const tb = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+    return tb - ta;
+  });
+
+  // Só o último arquivo da pasta (recomendado no Render Free / pastas que acumulam)
+  const fileMode = company.fileMode || "latest_only";
+  if (fileMode === "latest_only" || fileMode === "exact_name") {
+    files = files.slice(0, 1);
+  }
+
   for (const file of files) {
     if (!file.id || !file.name) continue;
 
