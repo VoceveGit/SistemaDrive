@@ -222,9 +222,13 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
         )}
       </div>
 
-      {(diff.truncated || diff.note) && (
+      {(diff.truncated || diff.note || diff.staging) && (
         <div className="mb-4 rounded-lg border border-accent-amber/40 bg-accent-amber/10 px-4 py-3 text-sm text-text-primary">
-          <p className="font-medium text-accent-amber">Preview parcial — nada foi enviado ao banco ainda</p>
+          <p className="font-medium text-accent-amber">
+            {diff.staging
+              ? "Tabela job — nada foi enviado ao destino ainda"
+              : "Preview parcial — nada foi enviado ao banco ainda"}
+          </p>
           <p className="mt-1 text-xs text-text-secondary">
             {diff.note ??
               "Confira se o cabeçalho e as primeiras linhas estão corretos. O envio completo só roda quando você clicar em Enviar todos."}

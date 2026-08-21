@@ -61,6 +61,7 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
   const [exactFileName, setExactFileName] = useState(company.exactFileName ?? "");
   const [syncMode, setSyncMode] = useState(company.syncMode ?? "incremental");
   const [useDateFilter, setUseDateFilter] = useState(company.useDateFilter ?? false);
+  const [useStagingTable, setUseStagingTable] = useState(company.useStagingTable ?? false);
   const [columnMapping, setColumnMapping] = useState<MappingPair[]>(() =>
     mappingToPairs(company.columnMapping),
   );
@@ -96,6 +97,7 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
           exactFileName: exactFileName.trim() || null,
           syncMode,
           useDateFilter,
+          useStagingTable,
           columnMapping: pairsToMapping(columnMapping),
         }),
       }),
@@ -128,6 +130,7 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
     if ("exactFileName" in patch) setExactFileName(String(patch.exactFileName ?? ""));
     if ("syncMode" in patch) setSyncMode(String(patch.syncMode));
     if ("useDateFilter" in patch) setUseDateFilter(Boolean(patch.useDateFilter));
+    if ("useStagingTable" in patch) setUseStagingTable(Boolean(patch.useStagingTable));
     if ("dateColumn" in patch) setDateColumn(String(patch.dateColumn ?? ""));
     if ("compareColumn" in patch) setCompareColumn(String(patch.compareColumn ?? ""));
     if ("columnMapping" in patch) setColumnMapping(patch.columnMapping as MappingPair[]);
@@ -230,6 +233,7 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
               exactFileName={exactFileName}
               syncMode={syncMode}
               useDateFilter={useDateFilter}
+              useStagingTable={useStagingTable}
               dateColumn={dateColumn}
               compareColumn={compareColumn}
               columnMapping={columnMapping}

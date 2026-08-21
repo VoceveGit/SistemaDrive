@@ -81,6 +81,7 @@ export type Company = {
   exactFileName?: string | null;
   syncMode?: string;
   useDateFilter?: boolean;
+  useStagingTable?: boolean;
   totalSpreadsheets: number;
   pendingSpreadsheets: number;
   todaySpreadsheets: number;
@@ -139,6 +140,7 @@ export type DiffResult = {
   syncMode?: string;
   truncated?: boolean;
   note?: string;
+  staging?: boolean;
   processMessage?: string | null;
 };
 

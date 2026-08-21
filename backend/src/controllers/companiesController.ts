@@ -170,6 +170,9 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
         }),
         ...(body.syncMode !== undefined && { syncMode: String(body.syncMode) }),
         ...(body.useDateFilter !== undefined && { useDateFilter: Boolean(body.useDateFilter) }),
+        ...(body.useStagingTable !== undefined && {
+          useStagingTable: Boolean(body.useStagingTable),
+        }),
       },
     });
 

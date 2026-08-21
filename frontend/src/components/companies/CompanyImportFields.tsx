@@ -25,6 +25,7 @@ type Props = {
   exactFileName: string;
   syncMode: string;
   useDateFilter: boolean;
+  useStagingTable: boolean;
   dateColumn: string;
   compareColumn: string;
   columnMapping: MappingPair[];
@@ -44,6 +45,7 @@ export function CompanyImportFields({
   exactFileName,
   syncMode,
   useDateFilter,
+  useStagingTable,
   dateColumn,
   compareColumn,
   columnMapping,
@@ -185,6 +187,20 @@ export function CompanyImportFields({
             />
           </label>
         )}
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-sm font-semibold text-text-primary">Planilha grande</h3>
+        <Check
+          checked={useStagingTable}
+          onChange={(v) => onChange({ useStagingTable: v })}
+          label="Usar tabela job (planilha grande)"
+        />
+        <p className="text-xs text-text-muted">
+          Grava as linhas em <code className="text-text-secondary">zz_import_staging</code> no
+          EXTRACTOR (uma tabela só; cada planilha é um job). Você valida o preview e só então
+          envia para a tabela destino. Os dados do job são apagados após o envio.
+        </p>
       </section>
 
       <section className="space-y-3">

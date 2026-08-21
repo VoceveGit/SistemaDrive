@@ -72,6 +72,11 @@ model Company {
   syncMode         String   @default("incremental")
   /** Se true e dateColumn setada: filtra banco pelo mês da 1ª linha de dados */
   useDateFilter    Boolean  @default(false)
+  /**
+   * Planilha grande: grava linhas na tabela genérica zz_import_staging (EXTRACTOR)
+   * para validar sem estourar RAM; envio ao destino só no botão Enviar.
+   */
+  useStagingTable  Boolean  @default(false)
 
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt

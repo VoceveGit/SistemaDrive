@@ -140,13 +140,16 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
     }
     let truncated = false;
     let note: string | undefined;
+    let staging = false;
     try {
       const raw = JSON.parse(ctx.spreadsheet.rawData) as {
         truncated?: boolean;
         note?: string;
+        staging?: boolean;
       };
       truncated = Boolean(raw.truncated);
       note = raw.note;
+      staging = Boolean(raw.staging);
     } catch {
       /* ignore */
     }
@@ -155,6 +158,7 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
       ...ctx.diff,
       truncated,
       note,
+      staging,
       processMessage: ctx.spreadsheet.processMessage,
     });
   } catch (error) {
@@ -363,15 +367,25 @@ export async function sendSpreadsheet(req: Request, res: Response): Promise<void
     }
 
     let truncated = false;
+    let staging = false;
     try {
-      const raw = JSON.parse(ctx.spreadsheet.rawData) as { truncated?: boolean };
+      const raw = JSON.parse(ctx.spreadsheet.rawData) as {
+        truncated?: boolean;
+        staging?: boolean;
+      };
       truncated = Boolean(raw.truncated);
+      staging = Boolean(raw.staging);
     } catch {
       /* ignore */
     }
 
-    // Preview truncado: rebaixa o arquivo e envia tudo em streaming (só agora, após validação)
-    if (truncated || ctx.spreadsheet.totalRows > 4000) {
+    // Staging ou preview truncado: envio completo sob demanda (após validação)
+    if (
+      truncated ||
+      staging ||
+      ctx.spreadsheet.totalRows > 4000 ||
+      ctx.spreadsheet.company.useStagingTable
+    ) {
       const { streamSendFromDrive } = await import("../services/streamSendService.js");
       const result = await streamSendFromDrive({
         spreadsheetId: id,
