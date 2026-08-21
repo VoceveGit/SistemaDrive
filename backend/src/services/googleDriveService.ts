@@ -7,7 +7,7 @@ import { google, type drive_v3 } from "googleapis";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import type { Server as SocketServer } from "socket.io";
-import type { Company } from "../../generated/prisma/client.js";
+import { enqueueImportJob } from "./importJobRunner.js";
 
 const SPREADSHEET_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -171,7 +171,171 @@ export async function getDriveClientForImport(): Promise<drive_v3.Drive | null> 
   return getDriveClient();
 }
 
+/** Lista planilhas da pasta (só metadados — sem download). */
+export async function listDriveFilesForCompany(companyId: string): Promise<
+  {
+    id: string;
+    name: string;
+    mimeType: string | null;
+    modifiedTime: string | null;
+    size: string | null;
+    spreadsheetId: string | null;
+    spreadsheetStatus: string | null;
+  }[]
+> {
+  const company = await prisma.company.findUnique({ where: { id: companyId } });
+  if (!company?.active) throw new Error("Empresa não encontrada");
+
+  const drive = await getDriveClient();
+  if (!drive) throw new Error("Google Drive não conectado");
+
+  const response = await drive.files.list({
+    q: `'${company.googleFolderId}' in parents and trashed = false`,
+    fields: "files(id, name, mimeType, modifiedTime, size)",
+    pageSize: 100,
+    orderBy: "modifiedTime desc",
+  });
+
+  let files = (response.data.files ?? []).filter(
+    (f) => f.mimeType && SPREADSHEET_MIMES.has(f.mimeType),
+  );
+
+  files.sort((a, b) => {
+    const ta = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
+    const tb = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
+    return tb - ta;
+  });
+
+  const fileIds = files.map((f) => f.id!).filter(Boolean);
+  const existing = fileIds.length
+    ? await prisma.spreadsheet.findMany({
+        where: { companyId, googleFileId: { in: fileIds } },
+        orderBy: { detectedAt: "desc" },
+        select: {
+          id: true,
+          googleFileId: true,
+          status: true,
+          detectedAt: true,
+        },
+      })
+    : [];
+
+  const latestByFile = new Map<string, { id: string; status: string }>();
+  for (const s of existing) {
+    if (!latestByFile.has(s.googleFileId)) {
+      latestByFile.set(s.googleFileId, { id: s.id, status: s.status });
+    }
+  }
+
+  return files
+    .filter((f) => f.id && f.name)
+    .map((f) => {
+      const link = latestByFile.get(f.id!);
+      return {
+        id: f.id!,
+        name: f.name!,
+        mimeType: f.mimeType ?? null,
+        modifiedTime: f.modifiedTime ?? null,
+        size: f.size ?? null,
+        spreadsheetId: link?.id ?? null,
+        spreadsheetStatus: link?.status ?? null,
+      };
+    });
+}
+
+/**
+ * Usuário escolheu um arquivo no Drive: cria registro (se preciso) e processa.
+ * Não baixa no processo da API — só enfileira o worker.
+ */
+export async function selectDriveFileForImport(params: {
+  companyId: string;
+  googleFileId: string;
+}): Promise<{ spreadsheetId: string; created: boolean }> {
+  const company = await prisma.company.findUnique({ where: { id: params.companyId } });
+  if (!company?.active) throw new Error("Empresa não encontrada");
+
+  const drive = await getDriveClient();
+  if (!drive) throw new Error("Google Drive não conectado");
+
+  const meta = await drive.files.get({
+    fileId: params.googleFileId,
+    fields: "id, name, mimeType, modifiedTime, size, parents, trashed",
+  });
+
+  const file = meta.data;
+  if (!file.id || !file.name || file.trashed) {
+    throw new Error("Arquivo não encontrado no Drive");
+  }
+  if (!file.mimeType || !SPREADSHEET_MIMES.has(file.mimeType)) {
+    throw new Error("Arquivo não é uma planilha suportada");
+  }
+  const parents = file.parents ?? [];
+  if (!parents.includes(company.googleFolderId)) {
+    throw new Error("Arquivo não pertence à pasta desta empresa");
+  }
+
+  const modifiedTime = file.modifiedTime ? new Date(file.modifiedTime) : new Date();
+
+  const existing = await prisma.spreadsheet.findFirst({
+    where: { companyId: company.id, googleFileId: file.id },
+    orderBy: { detectedAt: "desc" },
+  });
+
+  // Se já existe e está pending/processing, só reprocessa o mesmo
+  if (
+    existing &&
+    (existing.status === "pending" ||
+      existing.status === "processing" ||
+      existing.status === "queued" ||
+      existing.status === "approved")
+  ) {
+    await prisma.spreadsheet.update({
+      where: { id: existing.id },
+      data: {
+        status: "processing",
+        processMessage: "Na fila do worker (arquivo selecionado)...",
+        googleModifiedTime: modifiedTime,
+        fileName: file.name,
+      },
+    });
+    enqueueImportJob(existing.id);
+    return { spreadsheetId: existing.id, created: false };
+  }
+
+  const spreadsheet = await prisma.spreadsheet.create({
+    data: {
+      companyId: company.id,
+      googleFileId: file.id,
+      googleModifiedTime: modifiedTime,
+      fileName: file.name,
+      totalRows: 0,
+      processedRows: 0,
+      newRows: 0,
+      updatedRows: 0,
+      status: "processing",
+      processMessage: "Arquivo selecionado — processando...",
+      rawData: JSON.stringify({ headers: [], rows: [] }),
+      previousSpreadsheetId: existing?.id ?? null,
+    },
+  });
+
+  enqueueImportJob(spreadsheet.id);
+
+  if (ioRef) {
+    ioRef.emit("new_spreadsheet", {
+      companyId: company.id,
+      companyName: company.name,
+      fileName: file.name,
+      spreadsheetId: spreadsheet.id,
+    });
+  }
+
+  return { spreadsheetId: spreadsheet.id, created: true };
+}
+
 export async function pollAllCompanies(): Promise<void> {
+  // Poll não cria/baixa mais — a UI lista o Drive e o usuário escolhe o arquivo.
+  // Mantido o cron só para aquecer/validar conexão ocasionalmente.
   const drive = await getDriveClient();
   if (!drive) {
     console.warn(
@@ -179,99 +343,5 @@ export async function pollAllCompanies(): Promise<void> {
     );
     return;
   }
-
-  const companies = await prisma.company.findMany({ where: { active: true } });
-
-  for (const company of companies) {
-    try {
-      await pollCompanyFolder(drive, company);
-    } catch (error) {
-      console.error(`Erro ao monitorar pasta de ${company.name}:`, error);
-    }
-  }
-}
-
-async function pollCompanyFolder(
-  drive: drive_v3.Drive,
-  company: Company,
-): Promise<void> {
-  const companyId = company.id;
-  const companyName = company.name;
-  const folderId = company.googleFolderId;
-
-  const response = await drive.files.list({
-    q: `'${folderId}' in parents and trashed = false`,
-    fields: "files(id, name, mimeType, modifiedTime)",
-    pageSize: 100,
-  });
-
-  let files = (response.data.files ?? []).filter(
-    (f) => f.mimeType && SPREADSHEET_MIMES.has(f.mimeType),
-  );
-
-  if (company.fileMode === "exact_name" && company.exactFileName) {
-    const wanted = company.exactFileName.trim().toLowerCase();
-    files = files.filter((f) => (f.name ?? "").trim().toLowerCase() === wanted);
-  }
-
-  // Mais recente primeiro
-  files.sort((a, b) => {
-    const ta = a.modifiedTime ? new Date(a.modifiedTime).getTime() : 0;
-    const tb = b.modifiedTime ? new Date(b.modifiedTime).getTime() : 0;
-    return tb - ta;
-  });
-
-  // Só o último arquivo da pasta (recomendado no Render Free / pastas que acumulam)
-  const fileMode = company.fileMode || "latest_only";
-  if (fileMode === "latest_only" || fileMode === "exact_name") {
-    files = files.slice(0, 1);
-  }
-
-  for (const file of files) {
-    if (!file.id || !file.name) continue;
-
-    const modifiedTime = file.modifiedTime ? new Date(file.modifiedTime) : new Date();
-
-    const existing = await prisma.spreadsheet.findFirst({
-      where: { companyId, googleFileId: file.id },
-      orderBy: { detectedAt: "desc" },
-    });
-
-    if (existing) {
-      const lastModified = existing.googleModifiedTime?.getTime() ?? 0;
-      if (modifiedTime.getTime() <= lastModified) continue;
-    }
-
-    const spreadsheet = await prisma.spreadsheet.create({
-      data: {
-        companyId,
-        googleFileId: file.id,
-        googleModifiedTime: modifiedTime,
-        fileName: file.name,
-        totalRows: 0,
-        processedRows: 0,
-        newRows: 0,
-        updatedRows: 0,
-        // Detectado apenas — NÃO processa automático (fork no Free ainda pode matar o container)
-        status: "queued",
-        processMessage: "Arquivo detectado — clique em Processar quando o site estiver estável",
-        rawData: JSON.stringify({ headers: [], rows: [] }),
-        previousSpreadsheetId: existing?.id ?? null,
-      },
-    });
-
-    if (ioRef) {
-      ioRef.emit("new_spreadsheet", {
-        companyId,
-        companyName,
-        fileName: file.name,
-        spreadsheetId: spreadsheet.id,
-      });
-    }
-
-    // Processamento pesado NÃO dispara no poll — só via enqueue manual (POST /process)
-    console.log(
-      `[Drive] ${companyName}: detectado ${file.name} (queued, sem worker automático)`,
-    );
-  }
+  console.log("[Drive] Poll OK (lista sob demanda na UI; sem auto-import)");
 }

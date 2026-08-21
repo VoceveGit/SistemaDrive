@@ -304,6 +304,39 @@ export async function getCompanySheetHeaders(req: Request, res: Response): Promi
   }
 }
 
+export async function getCompanyDriveFiles(req: Request, res: Response): Promise<void> {
+  try {
+    const id = paramId(req.params.id);
+    const { listDriveFilesForCompany } = await import("../services/googleDriveService.js");
+    const files = await listDriveFilesForCompany(id);
+    res.json({ success: true, files });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Erro ao listar Drive";
+    res.status(500).json({ success: false, error: message });
+  }
+}
+
+/** Usuário selecionou um arquivo na lista — cria job e processa (worker). */
+export async function selectCompanyDriveFile(req: Request, res: Response): Promise<void> {
+  try {
+    const id = paramId(req.params.id);
+    const googleFileId = String(req.body?.googleFileId ?? "").trim();
+    if (!googleFileId) {
+      res.status(400).json({ success: false, error: "googleFileId é obrigatório" });
+      return;
+    }
+    const { selectDriveFileForImport } = await import("../services/googleDriveService.js");
+    const result = await selectDriveFileForImport({
+      companyId: id,
+      googleFileId,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Erro ao selecionar arquivo";
+    res.status(500).json({ success: false, error: message });
+  }
+}
+
 export async function getCompany(req: Request, res: Response): Promise<void> {
   const id = paramId(req.params.id);
   const company = await prisma.company.findUnique({ where: { id } });

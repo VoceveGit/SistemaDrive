@@ -24,6 +24,8 @@ import {
   getColumnsPreview,
   getCompanySpreadsheets,
   getCompanySheetHeaders,
+  getCompanyDriveFiles,
+  selectCompanyDriveFile,
   getCompany,
 } from "../controllers/companiesController.js";
 import {
@@ -69,6 +71,8 @@ router.get("/companies/:id/tables", getCompanyTables);
 router.get("/companies/:id/columns", getCompanyColumns);
 router.get("/companies/:id/spreadsheets", getCompanySpreadsheets);
 router.get("/companies/:id/sheet-headers", getCompanySheetHeaders);
+router.get("/companies/:id/drive-files", getCompanyDriveFiles);
+router.post("/companies/:id/drive-files/select", selectCompanyDriveFile);
 
 router.get("/spreadsheets/:id/diff", getDiff);
 router.post("/spreadsheets/:id/process", processSpreadsheet);
