@@ -17,6 +17,7 @@ import {
   safeUnlink,
   streamSheetFileInBatches,
 } from "./streamSheetService.js";
+import { getDriveClientForImport } from "./googleDriveService.js";
 
 const BATCH_SIZE = 500;
 const MAX_PREVIEW_ROWS = 300;
@@ -37,6 +38,40 @@ async function setProgress(
   },
 ): Promise<void> {
   await prisma.spreadsheet.update({ where: { id: spreadsheetId }, data });
+}
+
+/**
+ * Entry do worker: carrega planilha/empresa/Drive e roda o import.
+ * Não recebe objetos do processo pai (só o id via argv).
+ */
+export async function runChunkedImportById(spreadsheetId: string): Promise<void> {
+  const spreadsheet = await prisma.spreadsheet.findUnique({
+    where: { id: spreadsheetId },
+    include: { company: true },
+  });
+  if (!spreadsheet) {
+    throw new Error(`Planilha ${spreadsheetId} não encontrada`);
+  }
+
+  const drive = await getDriveClientForImport();
+  if (!drive) {
+    throw new Error("Google Drive não conectado");
+  }
+
+  const mimeGuess = spreadsheet.fileName.toLowerCase().endsWith(".csv")
+    ? "text/csv"
+    : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+  await runChunkedImport({
+    spreadsheetId,
+    company: spreadsheet.company,
+    drive,
+    file: {
+      id: spreadsheet.googleFileId,
+      name: spreadsheet.fileName,
+      mimeType: mimeGuess,
+    },
+  });
 }
 
 /**

@@ -58,10 +58,10 @@ async function main() {
     pollAllCompanies().catch((err) => console.error("Erro no polling:", err));
   });
 
-  // Poll inicial atrasado: planilhas grandes (Avinor) no Free derrubam o serviço se rodarem no boot
+  // Poll inicial atrasado: API sobe leve; import pesado só via worker (fork)
   setTimeout(() => {
     pollAllCompanies().catch((err) => console.error("Erro na varredura inicial:", err));
-  }, 90_000);
+  }, 120_000);
 
   httpServer.listen(env.port, () => {
     console.log(`Despacho API rodando em http://localhost:${env.port}`);

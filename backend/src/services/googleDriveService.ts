@@ -6,7 +6,7 @@ import path from "path";
 import { google, type drive_v3 } from "googleapis";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
-import { runChunkedImport } from "./chunkedImportService.js";
+import { enqueueImportJob } from "./importJobRunner.js";
 import type { Server as SocketServer } from "socket.io";
 import type { Company } from "../../generated/prisma/client.js";
 
@@ -269,18 +269,9 @@ async function pollCompanyFolder(
       });
     }
 
-    // Processa em background (lotes) — não bloqueia o poll nem estoura a RAM de uma vez
-    const spreadsheetId = spreadsheet.id;
-    setTimeout(() => {
-      runChunkedImport({
-        spreadsheetId,
-        company,
-        drive,
-        file,
-        emit: (event, payload) => ioRef?.emit(event, payload),
-      }).catch((err) => console.error(`[Drive] job ${file.name}:`, err));
-    }, 1500);
+    // Parse/import NUNCA no processo da API — só fork isolado
+    enqueueImportJob(spreadsheet.id);
 
-    console.log(`[Drive] ${companyName}: enfileirado ${file.name}`);
+    console.log(`[Drive] ${companyName}: enfileirado ${file.name} (worker)`);
   }
 }
