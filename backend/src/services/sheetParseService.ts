@@ -18,8 +18,24 @@ export type SheetParseOptions = {
   ignoreRules?: IgnoreRules | null;
 };
 
+/**
+ * Limpa lixo típico de Excel/XML: CR/LF e escapes _x000d_ / _x000a_.
+ * Sem isso cabeçalhos viram "_x000d_ Vendedor" e não batem com o banco.
+ */
+export function sanitizeExcelText(raw: string): string {
+  return String(raw ?? "")
+    .replace(/_x000[dD]_/g, "")
+    .replace(/_x000[aA]_/g, "")
+    .replace(/_x000[9]_/gi, " ")
+    .replace(/\r\n/g, " ")
+    .replace(/[\r\n\u2028\u2029]/g, " ")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function normalizeIgnoreToken(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
+  return sanitizeExcelText(value).toLowerCase().replace(/\s+/g, " ");
 }
 
 /**
@@ -95,11 +111,11 @@ export function parseWorkbookBuffer(
       : headerRowIndex + 1;
 
   const headerCells = json[headerRowIndex] ?? [];
-  const headers = headerCells.map((c) => String(c ?? "").trim());
+  const headers = headerCells.map((c) => sanitizeExcelText(String(c ?? "")));
   const colCount = headers.length;
 
   let rows = json.slice(dataStartIndex).map((row) =>
-    headers.map((_, i) => String(row?.[i] ?? "").trim()),
+    headers.map((_, i) => sanitizeExcelText(String(row?.[i] ?? ""))),
   );
 
   // Garante largura

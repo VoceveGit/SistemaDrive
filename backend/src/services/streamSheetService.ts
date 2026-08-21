@@ -9,23 +9,23 @@ import { Readable } from "stream";
 import type { drive_v3 } from "googleapis";
 import ExcelJS from "exceljs";
 import type { SheetParseOptions } from "./sheetParseService.js";
-import { resolveIgnoreColumnIndex } from "./sheetParseService.js";
+import { resolveIgnoreColumnIndex, sanitizeExcelText } from "./sheetParseService.js";
 import { excelLetterToIndex } from "../utils/columnMapping.js";
 
 function normalizeIgnoreToken(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
+  return sanitizeExcelText(value).toLowerCase().replace(/\s+/g, " ");
 }
 
 function cellToString(value: unknown): string {
   if (value == null) return "";
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "object" && value !== null && "text" in value) {
-    return String((value as { text?: unknown }).text ?? "").trim();
+    return sanitizeExcelText(String((value as { text?: unknown }).text ?? ""));
   }
   if (typeof value === "object" && value !== null && "result" in value) {
-    return String((value as { result?: unknown }).result ?? "").trim();
+    return sanitizeExcelText(String((value as { result?: unknown }).result ?? ""));
   }
-  return String(value).trim();
+  return sanitizeExcelText(String(value));
 }
 
 function isRowEmpty(row: string[]): boolean {
@@ -177,13 +177,13 @@ export async function streamXlsxInBatches(
       }
 
       if (rowNumber === headerRowNum) {
-        headers = cells.map((c) => c.trim());
-        colCount = headers.length;
-        keepIdx = headers
+        const rawHeaders = cells.map((c) => sanitizeExcelText(c));
+        colCount = Math.max(rawHeaders.length, cells.length);
+        keepIdx = rawHeaders
           .map((h, i) => ({ h, i }))
           .filter(({ h }) => h !== "")
           .map(({ i }) => i);
-        headers = keepIdx.map((i) => headers[i] ?? "");
+        headers = keepIdx.map((i) => rawHeaders[i] ?? "");
         lastFilled = Array(headers.length).fill("");
         if (ignore?.column && ignore.values?.length && ignoreLetterRawIdx == null) {
           ignoreColIdx = resolveIgnoreColumnIndex(ignore.column, headers, keepIdx);
