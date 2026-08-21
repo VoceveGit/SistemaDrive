@@ -93,9 +93,11 @@ export type Spreadsheet = {
   fileName: string;
   detectedAt: string;
   totalRows: number;
+  processedRows?: number;
   newRows: number;
   updatedRows?: number;
-  status: "pending" | "approved" | "sent" | "error" | "no_new_items";
+  status: "processing" | "pending" | "approved" | "sent" | "error" | "no_new_items";
+  processMessage?: string | null;
   sentAt?: string | null;
 };
 

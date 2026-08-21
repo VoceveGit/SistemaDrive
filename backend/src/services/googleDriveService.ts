@@ -6,13 +6,7 @@ import path from "path";
 import { google, type drive_v3 } from "googleapis";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
-import type { ParsedSpreadsheet } from "./diffService.js";
-import {
-  computeDiffForSpreadsheet,
-  parseRawData,
-} from "./diffService.js";
-import { parseOptionsFromCompany, parseWorkbookBuffer } from "./sheetParseService.js";
-import { processAutoSend } from "../controllers/spreadsheetsController.js";
+import { runChunkedImport } from "./chunkedImportService.js";
 import type { Server as SocketServer } from "socket.io";
 import type { Company } from "../../generated/prisma/client.js";
 
@@ -173,31 +167,6 @@ async function getDriveClient(): Promise<drive_v3.Drive | null> {
   return getOAuthDrive();
 }
 
-async function downloadAndParse(
-  drive: drive_v3.Drive,
-  file: drive_v3.Schema$File,
-  company: Company,
-): Promise<ParsedSpreadsheet> {
-  const mime = file.mimeType ?? "";
-  let buffer: Buffer;
-
-  if (mime === "application/vnd.google-apps.spreadsheet") {
-    const res = await drive.files.export(
-      { fileId: file.id!, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
-      { responseType: "arraybuffer" },
-    );
-    buffer = Buffer.from(res.data as ArrayBuffer);
-  } else {
-    const res = await drive.files.get(
-      { fileId: file.id!, alt: "media" },
-      { responseType: "arraybuffer" },
-    );
-    buffer = Buffer.from(res.data as ArrayBuffer);
-  }
-
-  return parseWorkbookBuffer(buffer, parseOptionsFromCompany(company));
-}
-
 export async function pollAllCompanies(): Promise<void> {
   const drive = await getDriveClient();
   if (!drive) {
@@ -269,80 +238,44 @@ async function pollCompanyFolder(
       if (modifiedTime.getTime() <= lastModified) continue;
     }
 
-    const parsed = await downloadAndParse(drive, file, company);
-    const syncMode = company.syncMode || "incremental";
-    const rowCount = parsed.rows.length;
-    // Planilhas grandes: não carrega a planilha anterior inteira na RAM (causa OOM no Free)
-    const skipPrevious =
-      syncMode === "snapshot" ||
-      syncMode === "principal_only" ||
-      rowCount > 2500;
-
-    let previousData: ParsedSpreadsheet | null = null;
-    if (!skipPrevious) {
-      if (existing) {
-        previousData = parseRawData(existing.rawData);
-      } else {
-        const prevSpreadsheet = await prisma.spreadsheet.findFirst({
-          where: { companyId },
-          orderBy: { detectedAt: "desc" },
-          select: { id: true, rawData: true },
-        });
-        if (prevSpreadsheet && prevSpreadsheet.rawData.length < 2_000_000) {
-          previousData = parseRawData(prevSpreadsheet.rawData);
-        }
-      }
-    }
-
-    const diff = await computeDiffForSpreadsheet(parsed, previousData, company);
-    previousData = null;
-
-    const previousSpreadsheetId = existing?.id ?? null;
-    const rawData = JSON.stringify(parsed);
-
     const spreadsheet = await prisma.spreadsheet.create({
       data: {
         companyId,
         googleFileId: file.id,
         googleModifiedTime: modifiedTime,
         fileName: file.name,
-        totalRows: rowCount,
-        newRows: diff.summary.mustSend,
-        updatedRows: diff.summary.mustUpdate ?? 0,
-        status: "pending",
-        rawData,
-        previousSpreadsheetId,
+        totalRows: 0,
+        processedRows: 0,
+        newRows: 0,
+        updatedRows: 0,
+        status: "processing",
+        processMessage: "Na fila...",
+        rawData: JSON.stringify({ headers: [], rows: [] }),
+        previousSpreadsheetId: existing?.id ?? null,
       },
     });
-
-    const spreadsheetId = spreadsheet.id;
-    const mustSend = diff.summary.mustSend;
-    const mustUpdate = diff.summary.mustUpdate ?? 0;
 
     if (ioRef) {
       ioRef.emit("new_spreadsheet", {
         companyId,
         companyName,
         fileName: file.name,
-        spreadsheetId,
+        spreadsheetId: spreadsheet.id,
       });
     }
 
-    // Auto-envio adiado pra liberar memória do parse/diff antes
-    if (company.autoSend) {
-      setTimeout(() => {
-        processAutoSend({
-          spreadsheetId,
-          companyId,
-          companyName,
-          fileName: file.name!,
-          emit: (event, payload) => ioRef?.emit(event, payload),
-        }).catch((err) => console.error("[autoSend]", err));
-      }, 5000);
-    }
+    // Processa em background (lotes) — não bloqueia o poll nem estoura a RAM de uma vez
+    const spreadsheetId = spreadsheet.id;
+    setTimeout(() => {
+      runChunkedImport({
+        spreadsheetId,
+        company,
+        drive,
+        file,
+        emit: (event, payload) => ioRef?.emit(event, payload),
+      }).catch((err) => console.error(`[Drive] job ${file.name}:`, err));
+    }, 1500);
 
-    console.log(
-      `[Drive] ${companyName}: ${file.name} (${rowCount} linhas, enviar=${mustSend}, atualizar=${mustUpdate})`,
-    );
+    console.log(`[Drive] ${companyName}: enfileirado ${file.name}`);
   }
 }

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { X, Settings, ChevronDown, ChevronUp } from "lucide-react";
+import { X, Settings, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { api, type Company, type Spreadsheet } from "../../lib/api";
 import { cn, formatDateTime, formatNumber } from "../../lib/utils";
 import { SpreadsheetDiff } from "./SpreadsheetDiff";
@@ -14,6 +14,10 @@ type CompanyDrawerProps = {
 };
 
 const statusLabels: Record<string, { label: string; className: string }> = {
+  processing: {
+    label: "Processando...",
+    className: "bg-text-muted/20 text-text-muted",
+  },
   pending: { label: "Aguardando", className: "bg-accent-amber/20 text-accent-amber" },
   approved: { label: "Aprovado", className: "bg-accent-blue/20 text-accent-blue" },
   sent: { label: "Enviado", className: "bg-accent-green/20 text-accent-green" },
@@ -32,6 +36,10 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
     queryKey: ["spreadsheets", company.id],
     queryFn: () =>
       api<{ spreadsheets: Spreadsheet[] }>(`/companies/${company.id}/spreadsheets`),
+    refetchInterval: (query) => {
+      const list = query.state.data?.spreadsheets ?? [];
+      return list.some((s) => s.status === "processing") ? 3000 : false;
+    },
   });
 
   const spreadsheets = data?.spreadsheets ?? [];
@@ -56,11 +64,7 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
             >
               <Settings size={16} /> Configurar
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg p-2 hover:bg-bg-card"
-            >
+            <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-bg-card">
               <X size={20} />
             </button>
           </div>
@@ -91,7 +95,8 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
                 </thead>
                 <tbody>
                   {spreadsheets.map((sheet) => {
-                    const isExpanded = expandedId === sheet.id;
+                    const isProcessing = sheet.status === "processing";
+                    const isExpanded = expandedId === sheet.id && !isProcessing;
                     const st = statusLabels[sheet.status] ?? statusLabels.pending;
                     return (
                       <SpreadsheetRow
@@ -100,9 +105,10 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
                         isExpanded={isExpanded}
                         status={st}
                         companyId={company.id}
-                        onToggle={() =>
-                          setExpandedId(isExpanded ? null : sheet.id)
-                        }
+                        onToggle={() => {
+                          if (isProcessing) return;
+                          setExpandedId(isExpanded ? null : sheet.id);
+                        }}
                       />
                     );
                   })}
@@ -114,10 +120,7 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
       </div>
 
       {showSettings && (
-        <CompanySettingsModal
-          company={company}
-          onClose={() => setShowSettings(false)}
-        />
+        <CompanySettingsModal company={company} onClose={() => setShowSettings(false)} />
       )}
     </>
   );
@@ -136,13 +139,39 @@ function SpreadsheetRow({
   companyId: string;
   onToggle: () => void;
 }) {
+  const isProcessing = sheet.status === "processing";
+  const progress =
+    sheet.totalRows > 0
+      ? `${formatNumber(sheet.processedRows ?? 0)} / ${formatNumber(sheet.totalRows)}`
+      : null;
+
   return (
     <>
       <tr
-        className="cursor-pointer border-t border-border hover:bg-bg-card/50"
+        className={cn(
+          "border-t border-border",
+          isProcessing
+            ? "cursor-default opacity-60"
+            : "cursor-pointer hover:bg-bg-card/50",
+        )}
         onClick={onToggle}
       >
-        <td className="px-4 py-3 font-medium">{sheet.fileName}</td>
+        <td
+          className={cn(
+            "px-4 py-3 font-medium",
+            isProcessing && "text-text-muted",
+          )}
+        >
+          <span className="inline-flex items-center gap-2">
+            {isProcessing && <Loader2 size={14} className="animate-spin text-text-muted" />}
+            {sheet.fileName}
+          </span>
+          {(sheet.processMessage || progress) && (
+            <p className="mt-0.5 text-xs font-normal text-text-muted">
+              {sheet.processMessage ?? progress}
+            </p>
+          )}
+        </td>
         <td className="px-4 py-3 text-text-secondary">{formatDateTime(sheet.detectedAt)}</td>
         <td className="px-4 py-3 font-mono">{formatNumber(sheet.totalRows)}</td>
         <td className="px-4 py-3 font-mono text-accent-green">
@@ -154,7 +183,7 @@ function SpreadsheetRow({
           </span>
         </td>
         <td className="px-4 py-3 text-text-secondary">
-          {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+          {!isProcessing && (isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />)}
         </td>
       </tr>
       {isExpanded && (

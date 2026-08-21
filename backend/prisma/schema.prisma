@@ -86,9 +86,12 @@ model Spreadsheet {
   googleModifiedTime    DateTime?
   fileName              String
   totalRows             Int       @default(0)
+  processedRows         Int       @default(0)
   newRows               Int       @default(0)
   updatedRows           Int       @default(0)
   status                String    @default("pending")
+  /** Mensagem curta de progresso/erro do job em partes */
+  processMessage        String?
   sentAt                DateTime?
   detectedAt            DateTime  @default(now())
   rawData               String

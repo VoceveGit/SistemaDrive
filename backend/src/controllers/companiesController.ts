@@ -249,8 +249,11 @@ export async function getCompanySpreadsheets(req: Request, res: Response): Promi
       fileName: true,
       detectedAt: true,
       totalRows: true,
+      processedRows: true,
       newRows: true,
+      updatedRows: true,
       status: true,
+      processMessage: true,
       sentAt: true,
     },
   });
@@ -269,8 +272,11 @@ export async function getCompanySpreadsheets(req: Request, res: Response): Promi
       fileName: true,
       detectedAt: true,
       totalRows: true,
+      processedRows: true,
       newRows: true,
+      updatedRows: true,
       status: true,
+      processMessage: true,
       sentAt: true,
     },
   });
