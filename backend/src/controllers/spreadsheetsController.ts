@@ -115,13 +115,16 @@ function mapRowsForDb(
 
   const mappedHeaders: string[] = [];
   const indices: number[] = [];
+  const usedTargets = new Set<string>();
 
   headers.forEach((h, i) => {
     const target = mapping[h];
-    if (target) {
-      mappedHeaders.push(target);
-      indices.push(i);
-    }
+    if (!target) return;
+    const key = target.toLowerCase().trim();
+    if (usedTargets.has(key)) return; // evita destino duplicado (ex.: Nome 2x)
+    usedTargets.add(key);
+    mappedHeaders.push(target);
+    indices.push(i);
   });
 
   if (mappedHeaders.length === 0) return { headers, rows };

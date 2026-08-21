@@ -220,10 +220,17 @@ export function alignRowsToTableColumns(
   const indices: number[] = [];
   const dbHeaders: string[] = [];
   const skipped: string[] = [];
+  const usedDbCols = new Set<string>();
 
   headers.forEach((h, i) => {
-    const col = columnByLower.get(h.toLowerCase());
+    const col = columnByLower.get(h.toLowerCase().trim());
     if (col) {
+      const dbKey = col.column_name.toLowerCase();
+      // Evita INSERT com a mesma coluna 2x (ex.: duas colunas "Nome" na planilha)
+      if (usedDbCols.has(dbKey)) {
+        skipped.push(`${h} (duplicada → ${col.column_name})`);
+        return;
+      }
       const isPkUpsert =
         options?.primaryKeyColumn &&
         options.primaryKeyColumn.toLowerCase() === col.column_name.toLowerCase();
@@ -231,6 +238,7 @@ export function alignRowsToTableColumns(
         skipped.push(h);
         return;
       }
+      usedDbCols.add(dbKey);
       dbHeaders.push(col.column_name);
       indices.push(i);
     } else {
