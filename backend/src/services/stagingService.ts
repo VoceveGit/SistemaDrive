@@ -103,14 +103,26 @@ export async function fetchStagingPreview(
   jobId: string,
   limit = 300,
 ): Promise<string[][]> {
+  return fetchStagingPage(settings, jobId, 0, limit);
+}
+
+/** Página do staging (offset/limit) — para preview automático sem OOM. */
+export async function fetchStagingPage(
+  settings: DbSettings,
+  jobId: string,
+  offset: number,
+  limit: number,
+): Promise<string[][]> {
   const conn = await mysqlConn(settings);
   try {
+    const safeOffset = Math.max(0, Math.floor(offset));
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
     const [rows] = await conn.query<mysql.RowDataPacket[]>(
       `SELECT \`payload_json\` FROM \`${STAGING_TABLE}\`
        WHERE \`job_id\` = ?
        ORDER BY \`row_num\` ASC
-       LIMIT ?`,
-      [jobId, limit],
+       LIMIT ? OFFSET ?`,
+      [jobId, safeLimit, safeOffset],
     );
     return rows.map((r) => {
       try {

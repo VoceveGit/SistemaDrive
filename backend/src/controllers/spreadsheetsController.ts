@@ -114,16 +114,27 @@ function mapRowsForDb(
 export async function getDiff(req: Request, res: Response): Promise<void> {
   try {
     const id = paramId(req.params.id);
-    const ctx = await loadSpreadsheetContext(id);
-    if (!ctx) {
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 300));
+
+    const spreadsheet = await prisma.spreadsheet.findUnique({
+      where: { id },
+      include: { company: true },
+    });
+    if (!spreadsheet) {
       res.status(404).json({ success: false, error: "Planilha não encontrada" });
       return;
     }
+
     let truncated = false;
     let note: string | undefined;
     let staging = false;
+    let headers: string[] = [];
+    let storedRows: string[][] = [];
     try {
-      const raw = JSON.parse(ctx.spreadsheet.rawData) as {
+      const raw = JSON.parse(spreadsheet.rawData) as {
+        headers?: string[];
+        rows?: string[][];
         truncated?: boolean;
         note?: string;
         staging?: boolean;
@@ -131,16 +142,79 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
       truncated = Boolean(raw.truncated);
       note = raw.note;
       staging = Boolean(raw.staging);
+      headers = Array.isArray(raw.headers) ? raw.headers : [];
+      storedRows = Array.isArray(raw.rows) ? raw.rows : [];
     } catch {
       /* ignore */
     }
+
+    let pageRows: string[][] = [];
+    let totalRows = spreadsheet.totalRows || storedRows.length;
+    let hasMore = false;
+
+    if (staging || spreadsheet.company.useStagingTable) {
+      const dbSettings = await getAppDbSettings();
+      if (!dbSettings) {
+        res.status(500).json({ success: false, error: "Banco de destino não configurado" });
+        return;
+      }
+      const { fetchStagingPage, countStagingRows } = await import(
+        "../services/stagingService.js"
+      );
+      const stagedCount = await countStagingRows(dbSettings, id);
+      if (stagedCount > 0) totalRows = stagedCount;
+      pageRows = await fetchStagingPage(dbSettings, id, offset, limit);
+      hasMore = offset + pageRows.length < totalRows;
+      truncated = hasMore || totalRows > pageRows.length;
+      note =
+        note ??
+        `Lote ${offset + 1}–${offset + pageRows.length} de ${totalRows} (staging).`;
+    } else {
+      pageRows = storedRows.slice(offset, offset + limit);
+      totalRows = spreadsheet.totalRows || storedRows.length;
+      hasMore = offset + pageRows.length < Math.min(totalRows, storedRows.length);
+      // Sem staging, só o que está no Neon (até MAX_STORE_ROWS)
+      if (offset + limit >= storedRows.length && totalRows > storedRows.length) {
+        hasMore = false;
+        truncated = true;
+        note =
+          note ??
+          `Preview limitado a ${storedRows.length} de ${totalRows} linhas. Ative "Usar tabela job" para ver tudo.`;
+      }
+    }
+
+    let previous = null;
+    if (spreadsheet.previousSpreadsheetId) {
+      const prev = await prisma.spreadsheet.findUnique({
+        where: { id: spreadsheet.previousSpreadsheetId },
+      });
+      if (prev) previous = parseRawData(prev.rawData);
+    }
+
+    const current = { headers, rows: pageRows };
+    const diff = await computeDiffForSpreadsheet(current, previous, spreadsheet.company);
+
     res.json({
       success: true,
-      ...ctx.diff,
+      ...diff,
+      // summary desta página; o front soma ao carregar em cadeia
+      summary: {
+        ...diff.summary,
+        totalRows: pageRows.length,
+        jobTotalRows: totalRows,
+      },
       truncated,
       note,
       staging,
-      processMessage: ctx.spreadsheet.processMessage,
+      processMessage: spreadsheet.processMessage,
+      pagination: {
+        offset,
+        limit,
+        loaded: pageRows.length,
+        total: totalRows,
+        hasMore,
+        nextOffset: hasMore ? offset + pageRows.length : null,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro ao calcular diff";
@@ -490,10 +564,12 @@ export async function processAutoSend(params: {
 
 export async function sendTestSpreadsheet(req: Request, res: Response): Promise<void> {
   try {
-    const { mode, rowIndex, selectedRows } = req.body as {
+    const { mode, rowIndex, selectedRows, selectedData } = req.body as {
       mode?: "single" | "pick";
       rowIndex?: number;
       selectedRows?: number[];
+      /** Linhas já resolvidas no front (necessário após carregar páginas além do preview). */
+      selectedData?: string[][];
     };
 
     const id = paramId(req.params.id);
@@ -506,6 +582,22 @@ export async function sendTestSpreadsheet(req: Request, res: Response): Promise<
     let rowsToSend: string[][] = [];
     if (mode === "single") {
       rowsToSend = getMustSendRowsByIndices(ctx.diff, [0]);
+      // Se o preview não tem "novo", tenta primeira página do staging
+      if (rowsToSend.length === 0 && ctx.spreadsheet.company.useStagingTable) {
+        const dbSettings = await getAppDbSettings();
+        if (dbSettings) {
+          const { fetchStagingPage } = await import("../services/stagingService.js");
+          const page = await fetchStagingPage(dbSettings, id, 0, 50);
+          const pageDiff = await computeDiffForSpreadsheet(
+            { headers: ctx.current.headers, rows: page },
+            null,
+            ctx.spreadsheet.company,
+          );
+          rowsToSend = getMustSendRowsByIndices(pageDiff, [0]);
+        }
+      }
+    } else if (mode === "pick" && selectedData?.length) {
+      rowsToSend = selectedData.filter((r) => Array.isArray(r) && r.length > 0);
     } else if (mode === "pick" && selectedRows?.length) {
       rowsToSend = getMustSendRowsByIndices(ctx.diff, selectedRows);
     } else {

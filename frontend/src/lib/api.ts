@@ -128,6 +128,7 @@ export type DiffResult = {
     alreadyInDb: number;
     mustSend: number;
     mustUpdate?: number;
+    jobTotalRows?: number;
   };
   dbWindowDays: number;
   dateColumnUsed: string | null;
@@ -142,6 +143,14 @@ export type DiffResult = {
   note?: string;
   staging?: boolean;
   processMessage?: string | null;
+  pagination?: {
+    offset: number;
+    limit: number;
+    loaded: number;
+    total: number;
+    hasMore: boolean;
+    nextOffset: number | null;
+  };
 };
 
 export type SendReport = {
