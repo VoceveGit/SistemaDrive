@@ -564,11 +564,10 @@ export async function processAutoSend(params: {
 
 export async function sendTestSpreadsheet(req: Request, res: Response): Promise<void> {
   try {
-    const { mode, rowIndex, selectedRows, selectedData } = req.body as {
+    const { mode, selectedRows, selectedData } = req.body as {
       mode?: "single" | "pick";
-      rowIndex?: number;
       selectedRows?: number[];
-      /** Linhas já resolvidas no front (necessário após carregar páginas além do preview). */
+      /** Linhas já resolvidas no front (obrigatório após preview paginado). */
       selectedData?: string[][];
     };
 
@@ -580,33 +579,31 @@ export async function sendTestSpreadsheet(req: Request, res: Response): Promise<
     }
 
     let rowsToSend: string[][] = [];
-    if (mode === "single") {
-      rowsToSend = getMustSendRowsByIndices(ctx.diff, [0]);
-      // Se o preview não tem "novo", tenta primeira página do staging
-      if (rowsToSend.length === 0 && ctx.spreadsheet.company.useStagingTable) {
-        const dbSettings = await getAppDbSettings();
-        if (dbSettings) {
-          const { fetchStagingPage } = await import("../services/stagingService.js");
-          const page = await fetchStagingPage(dbSettings, id, 0, 50);
-          const pageDiff = await computeDiffForSpreadsheet(
-            { headers: ctx.current.headers, rows: page },
-            null,
-            ctx.spreadsheet.company,
-          );
-          rowsToSend = getMustSendRowsByIndices(pageDiff, [0]);
-        }
-      }
-    } else if (mode === "pick" && selectedData?.length) {
+
+    // Preferência: dados enviados pelo front (linha PRÓXIMO/NOVO da tela)
+    if (Array.isArray(selectedData) && selectedData.length > 0) {
       rowsToSend = selectedData.filter((r) => Array.isArray(r) && r.length > 0);
+    } else if (mode === "single") {
+      rowsToSend = getMustSendRowsByIndices(ctx.diff, [0]);
+      if (rowsToSend.length === 0) {
+        rowsToSend = await findFirstMustSendFromStaging(id, ctx);
+      }
     } else if (mode === "pick" && selectedRows?.length) {
       rowsToSend = getMustSendRowsByIndices(ctx.diff, selectedRows);
     } else {
-      res.status(400).json({ success: false, error: "Selecione ao menos uma linha para enviar" });
+      res.status(400).json({
+        success: false,
+        error: "Selecione ao menos uma linha NOVA (checkbox) para enviar",
+      });
       return;
     }
 
     if (rowsToSend.length === 0) {
-      res.status(400).json({ success: false, error: "Nenhuma linha válida selecionada para envio" });
+      res.status(400).json({
+        success: false,
+        error:
+          "Nenhuma linha NOVA encontrada para envio. Confira o comparativo (status PRÓXIMO/NOVO).",
+      });
       return;
     }
 
@@ -616,6 +613,42 @@ export async function sendTestSpreadsheet(req: Request, res: Response): Promise<
     const message = error instanceof Error ? error.message : "Erro no envio teste";
     res.status(500).json({ success: false, error: message });
   }
+}
+
+/** Varre o staging em lotes até achar a 1ª linha que deve ser enviada. */
+async function findFirstMustSendFromStaging(
+  spreadsheetId: string,
+  ctx: NonNullable<Awaited<ReturnType<typeof loadSpreadsheetContext>>>,
+): Promise<string[][]> {
+  const useStaging =
+    ctx.spreadsheet.company.useStagingTable ||
+    (() => {
+      try {
+        return Boolean((JSON.parse(ctx.spreadsheet.rawData) as { staging?: boolean }).staging);
+      } catch {
+        return false;
+      }
+    })();
+  if (!useStaging) return [];
+
+  const dbSettings = await getAppDbSettings();
+  if (!dbSettings) return [];
+
+  const { fetchStagingPage, countStagingRows } = await import("../services/stagingService.js");
+  const total = await countStagingRows(dbSettings, spreadsheetId);
+  const pageSize = 300;
+  for (let offset = 0; offset < total; offset += pageSize) {
+    const page = await fetchStagingPage(dbSettings, spreadsheetId, offset, pageSize);
+    if (!page.length) break;
+    const pageDiff = await computeDiffForSpreadsheet(
+      { headers: ctx.current.headers, rows: page },
+      null,
+      ctx.spreadsheet.company,
+    );
+    const found = getMustSendRowsByIndices(pageDiff, [0]);
+    if (found.length) return found;
+  }
+  return [];
 }
 
 /** Dispara o worker isolado sob demanda (poll só detecta e deixa queued). */

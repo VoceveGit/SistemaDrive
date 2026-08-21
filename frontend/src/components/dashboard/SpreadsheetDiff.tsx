@@ -181,14 +181,25 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
   });
 
   const sendOneMutation = useMutation({
-    mutationFn: () =>
-      api<{ insertedCount?: number; completed?: boolean; report?: SendReport }>(
+    mutationFn: () => {
+      const first = rows.find((r) => r.mustSend);
+      if (!first) {
+        return Promise.reject(
+          new Error(
+            loadingMore
+              ? "Aguarde o carregamento terminar para enviar"
+              : "Nenhuma linha NOVA na tela para enviar",
+          ),
+        );
+      }
+      return api<{ insertedCount?: number; completed?: boolean; report?: SendReport }>(
         `/spreadsheets/${spreadsheetId}/send-test`,
         {
           method: "POST",
-          body: JSON.stringify({ mode: "single" }),
+          body: JSON.stringify({ mode: "pick", selectedData: [first.data] }),
         },
-      ),
+      );
+    },
     onSuccess: handleSendSuccess,
     onError: (e: Error) => toast.error(e.message),
   });
@@ -196,12 +207,18 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
   const sendSelectedMutation = useMutation({
     mutationFn: () => {
       if (selectedRows.length === 0) {
-        return Promise.reject(new Error("Marque as linhas que deseja enviar"));
+        return Promise.reject(
+          new Error("Marque os quadradinhos nas linhas NOVO antes de enviar"),
+        );
       }
       const mustSendRows = rows.filter((r) => r.mustSend);
       const selectedData = selectedRows
         .filter((i) => i >= 0 && i < mustSendRows.length)
-        .map((i) => mustSendRows[i].data);
+        .map((i) => mustSendRows[i].data)
+        .filter((r) => Array.isArray(r) && r.length > 0);
+      if (selectedData.length === 0) {
+        return Promise.reject(new Error("Nenhuma linha NOVA marcada — use os checkboxes"));
+      }
       return api<{ insertedCount?: number; completed?: boolean; report?: SendReport }>(
         `/spreadsheets/${spreadsheetId}/send-test`,
         {
@@ -390,8 +407,9 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
       {canSend ? (
         <div className="mb-4 rounded-lg border border-border bg-bg-card p-4">
           <p className="mb-3 text-xs text-text-secondary">
-            Escolha como enviar. Prefira esperar o carregamento terminar para os contadores
-            ficarem completos.
+            <strong>Enviar somente 1</strong> manda a linha marcada como PRÓXIMO.{" "}
+            <strong>Enviar selecionados</strong>: 1º clique ativa os checkboxes, marque as NOVO, 2º
+            clique envia. <strong>Enviar todos</strong> manda o job completo do staging.
           </p>
           <div className="flex flex-wrap gap-2">
             <button
