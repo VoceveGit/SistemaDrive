@@ -270,23 +270,35 @@ async function pollCompanyFolder(
     }
 
     const parsed = await downloadAndParse(drive, file, company);
+    const syncMode = company.syncMode || "incremental";
+    const rowCount = parsed.rows.length;
+    // Planilhas grandes: não carrega a planilha anterior inteira na RAM (causa OOM no Free)
+    const skipPrevious =
+      syncMode === "snapshot" ||
+      syncMode === "principal_only" ||
+      rowCount > 2500;
 
     let previousData: ParsedSpreadsheet | null = null;
-    if (existing) {
-      previousData = parseRawData(existing.rawData);
-    } else {
-      const prevSpreadsheet = await prisma.spreadsheet.findFirst({
-        where: { companyId },
-        orderBy: { detectedAt: "desc" },
-      });
-      if (prevSpreadsheet) {
-        previousData = parseRawData(prevSpreadsheet.rawData);
+    if (!skipPrevious) {
+      if (existing) {
+        previousData = parseRawData(existing.rawData);
+      } else {
+        const prevSpreadsheet = await prisma.spreadsheet.findFirst({
+          where: { companyId },
+          orderBy: { detectedAt: "desc" },
+          select: { id: true, rawData: true },
+        });
+        if (prevSpreadsheet && prevSpreadsheet.rawData.length < 2_000_000) {
+          previousData = parseRawData(prevSpreadsheet.rawData);
+        }
       }
     }
 
     const diff = await computeDiffForSpreadsheet(parsed, previousData, company);
+    previousData = null;
 
     const previousSpreadsheetId = existing?.id ?? null;
+    const rawData = JSON.stringify(parsed);
 
     const spreadsheet = await prisma.spreadsheet.create({
       data: {
@@ -294,32 +306,43 @@ async function pollCompanyFolder(
         googleFileId: file.id,
         googleModifiedTime: modifiedTime,
         fileName: file.name,
-        totalRows: parsed.rows.length,
+        totalRows: rowCount,
         newRows: diff.summary.mustSend,
         updatedRows: diff.summary.mustUpdate ?? 0,
         status: "pending",
-        rawData: JSON.stringify(parsed),
+        rawData,
         previousSpreadsheetId,
       },
     });
+
+    const spreadsheetId = spreadsheet.id;
+    const mustSend = diff.summary.mustSend;
+    const mustUpdate = diff.summary.mustUpdate ?? 0;
 
     if (ioRef) {
       ioRef.emit("new_spreadsheet", {
         companyId,
         companyName,
         fileName: file.name,
-        spreadsheetId: spreadsheet.id,
+        spreadsheetId,
       });
     }
 
+    // Auto-envio adiado pra liberar memória do parse/diff antes
     if (company.autoSend) {
-      await processAutoSend({
-        spreadsheetId: spreadsheet.id,
-        companyId,
-        companyName,
-        fileName: file.name,
-        emit: (event, payload) => ioRef?.emit(event, payload),
-      });
+      setTimeout(() => {
+        processAutoSend({
+          spreadsheetId,
+          companyId,
+          companyName,
+          fileName: file.name!,
+          emit: (event, payload) => ioRef?.emit(event, payload),
+        }).catch((err) => console.error("[autoSend]", err));
+      }, 5000);
     }
+
+    console.log(
+      `[Drive] ${companyName}: ${file.name} (${rowCount} linhas, enviar=${mustSend}, atualizar=${mustUpdate})`,
+    );
   }
 }

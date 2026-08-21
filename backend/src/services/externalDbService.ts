@@ -555,6 +555,8 @@ export async function insertRows(
     }),
   );
 
+  const BATCH = 100;
+
   if (settings.dbType === "mysql") {
     const conn = await mysql.createConnection({
       host: settings.dbHost,
@@ -567,21 +569,24 @@ export async function insertRows(
     const cols = dbHeaders.map((h) => `\`${h.replace(/`/g, "")}\``).join(", ");
     let inserted = 0;
 
-    for (const row of normalizedRows) {
-      const placeholders = row.map(() => "?").join(", ");
-      if (pk) {
-        const updates = dbHeaders
-          .filter((h) => h !== pk)
-          .map((h) => `\`${h.replace(/`/g, "")}\` = VALUES(\`${h.replace(/`/g, "")}\`)`)
-          .join(", ");
-        await conn.query(
-          `INSERT INTO ${safeTable} (${cols}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updates}`,
-          row,
-        );
-      } else {
-        await conn.query(`INSERT INTO ${safeTable} (${cols}) VALUES (${placeholders})`, row);
+    for (let i = 0; i < normalizedRows.length; i += BATCH) {
+      const chunk = normalizedRows.slice(i, i + BATCH);
+      for (const row of chunk) {
+        const placeholders = row.map(() => "?").join(", ");
+        if (pk) {
+          const updates = dbHeaders
+            .filter((h) => h !== pk)
+            .map((h) => `\`${h.replace(/`/g, "")}\` = VALUES(\`${h.replace(/`/g, "")}\`)`)
+            .join(", ");
+          await conn.query(
+            `INSERT INTO ${safeTable} (${cols}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updates}`,
+            row,
+          );
+        } else {
+          await conn.query(`INSERT INTO ${safeTable} (${cols}) VALUES (${placeholders})`, row);
+        }
+        inserted++;
       }
-      inserted++;
     }
     await conn.end();
     return { insertedCount: inserted, skippedColumns: skipped };
@@ -593,22 +598,25 @@ export async function insertRows(
   const cols = dbHeaders.map((h) => `"${h.replace(/"/g, "")}"`).join(", ");
   let inserted = 0;
 
-  for (const row of normalizedRows) {
-    const placeholders = row.map((_, i) => `$${i + 1}`).join(", ");
-    if (pk) {
-      const updates = dbHeaders
-        .filter((h) => h !== pk)
-        .map((h) => `"${h.replace(/"/g, "")}" = EXCLUDED."${h.replace(/"/g, "")}"`)
-        .join(", ");
-      await client.query(
-        `INSERT INTO ${safeTable} (${cols}) VALUES (${placeholders})
-         ON CONFLICT ("${pk.replace(/"/g, "")}") DO UPDATE SET ${updates}`,
-        row,
-      );
-    } else {
-      await client.query(`INSERT INTO ${safeTable} (${cols}) VALUES (${placeholders})`, row);
+  for (let i = 0; i < normalizedRows.length; i += BATCH) {
+    const chunk = normalizedRows.slice(i, i + BATCH);
+    for (const row of chunk) {
+      const placeholders = row.map((_, idx) => `$${idx + 1}`).join(", ");
+      if (pk) {
+        const updates = dbHeaders
+          .filter((h) => h !== pk)
+          .map((h) => `"${h.replace(/"/g, "")}" = EXCLUDED."${h.replace(/"/g, "")}"`)
+          .join(", ");
+        await client.query(
+          `INSERT INTO ${safeTable} (${cols}) VALUES (${placeholders})
+           ON CONFLICT ("${pk.replace(/"/g, "")}") DO UPDATE SET ${updates}`,
+          row,
+        );
+      } else {
+        await client.query(`INSERT INTO ${safeTable} (${cols}) VALUES (${placeholders})`, row);
+      }
+      inserted++;
     }
-    inserted++;
   }
   await client.end();
   return { insertedCount: inserted, skippedColumns: skipped };
