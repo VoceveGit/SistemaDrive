@@ -1,8 +1,9 @@
 // frontend/src/components/dashboard/CompanyDrawer.tsx
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { X, Settings, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { X, Settings, ChevronDown, ChevronUp, Loader2, Play } from "lucide-react";
 import { api, type Company, type Spreadsheet } from "../../lib/api";
 import { cn, formatDateTime, formatNumber } from "../../lib/utils";
 import { SpreadsheetDiff } from "./SpreadsheetDiff";
@@ -14,6 +15,10 @@ type CompanyDrawerProps = {
 };
 
 const statusLabels: Record<string, { label: string; className: string }> = {
+  queued: {
+    label: "Na fila",
+    className: "bg-accent-blue/20 text-accent-blue",
+  },
   processing: {
     label: "Processando...",
     className: "bg-text-muted/20 text-text-muted",
@@ -31,6 +36,7 @@ const statusLabels: Record<string, { label: string; className: string }> = {
 export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
     queryKey: ["spreadsheets", company.id],
@@ -40,6 +46,16 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
       const list = query.state.data?.spreadsheets ?? [];
       return list.some((s) => s.status === "processing") ? 3000 : false;
     },
+  });
+
+  const processMutation = useMutation({
+    mutationFn: (spreadsheetId: string) =>
+      api(`/spreadsheets/${spreadsheetId}/process`, { method: "POST" }),
+    onSuccess: () => {
+      toast.success("Processamento iniciado no worker");
+      queryClient.invalidateQueries({ queryKey: ["spreadsheets", company.id] });
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   const spreadsheets = data?.spreadsheets ?? [];
@@ -77,7 +93,7 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
             <div className="rounded-xl border border-dashed border-border p-12 text-center">
               <p className="text-text-secondary">Nenhuma planilha recebida ainda</p>
               <p className="mt-2 text-xs text-text-muted">
-                Compartilhe a pasta do Drive com o cliente e aguarde o envio
+                Compartilhe a pasta do Drive com o cliente e aguarde a detecção
               </p>
             </div>
           ) : (
@@ -96,7 +112,10 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
                 <tbody>
                   {spreadsheets.map((sheet) => {
                     const isProcessing = sheet.status === "processing";
-                    const isExpanded = expandedId === sheet.id && !isProcessing;
+                    const isExpanded =
+                      expandedId === sheet.id &&
+                      !isProcessing &&
+                      sheet.status !== "queued";
                     const st = statusLabels[sheet.status] ?? statusLabels.pending;
                     return (
                       <SpreadsheetRow
@@ -105,8 +124,10 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
                         isExpanded={isExpanded}
                         status={st}
                         companyId={company.id}
+                        processingBusy={processMutation.isPending}
+                        onProcess={() => processMutation.mutate(sheet.id)}
                         onToggle={() => {
-                          if (isProcessing) return;
+                          if (isProcessing || sheet.status === "queued") return;
                           setExpandedId(isExpanded ? null : sheet.id);
                         }}
                       />
@@ -131,15 +152,23 @@ function SpreadsheetRow({
   isExpanded,
   status,
   companyId,
+  processingBusy,
+  onProcess,
   onToggle,
 }: {
   sheet: Spreadsheet;
   isExpanded: boolean;
   status: { label: string; className: string };
   companyId: string;
+  processingBusy: boolean;
+  onProcess: () => void;
   onToggle: () => void;
 }) {
   const isProcessing = sheet.status === "processing";
+  const isQueued =
+    sheet.status === "queued" ||
+    sheet.status === "error" ||
+    sheet.status === "processing";
   const progress =
     sheet.totalRows > 0
       ? `${formatNumber(sheet.processedRows ?? 0)} / ${formatNumber(sheet.totalRows)}`
@@ -152,7 +181,9 @@ function SpreadsheetRow({
           "border-t border-border",
           isProcessing
             ? "cursor-default opacity-60"
-            : "cursor-pointer hover:bg-bg-card/50",
+            : sheet.status === "queued"
+              ? "cursor-default"
+              : "cursor-pointer hover:bg-bg-card/50",
         )}
         onClick={onToggle}
       >
@@ -182,8 +213,23 @@ function SpreadsheetRow({
             {status.label}
           </span>
         </td>
-        <td className="px-4 py-3 text-text-secondary">
-          {!isProcessing && (isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />)}
+        <td className="px-4 py-3 text-text-secondary" onClick={(e) => e.stopPropagation()}>
+          {isQueued ? (
+            <button
+              type="button"
+              disabled={processingBusy}
+              onClick={onProcess}
+              className="inline-flex items-center gap-1 rounded-lg bg-accent-blue px-2.5 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              <Play size={12} /> Processar
+            </button>
+          ) : !isProcessing ? (
+            isExpanded ? (
+              <ChevronUp size={18} />
+            ) : (
+              <ChevronDown size={18} />
+            )
+          ) : null}
         </td>
       </tr>
       {isExpanded && (

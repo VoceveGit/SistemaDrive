@@ -7,7 +7,6 @@ import { slugify } from "../utils/slug.js";
 import { normalizeGoogleFolderId } from "../utils/googleFolder.js";
 import { startOfToday } from "../utils/dates.js";
 import { paramId } from "../utils/params.js";
-import { syncSpreadsheetStatusIfFullySent } from "./spreadsheetsController.js";
 import { getAppDbSettings, listColumns, listTables } from "../services/externalDbService.js";
 import type { Company } from "../../generated/prisma/client.js";
 
@@ -244,6 +243,8 @@ export async function getCompanyColumns(req: Request, res: Response): Promise<vo
 
 export async function getCompanySpreadsheets(req: Request, res: Response): Promise<void> {
   const id = paramId(req.params.id);
+  // NÃO chamar syncSpreadsheetStatusIfFullySent aqui:
+  // isso carrega rawData + diff + MySQL e OOM no Render Free ao abrir o card.
   const spreadsheets = await prisma.spreadsheet.findMany({
     where: { companyId: id },
     orderBy: { detectedAt: "desc" },
@@ -261,30 +262,7 @@ export async function getCompanySpreadsheets(req: Request, res: Response): Promi
     },
   });
 
-  await Promise.all(
-    spreadsheets
-      .filter((s) => s.status === "pending" || s.status === "approved")
-      .map((s) => syncSpreadsheetStatusIfFullySent(s.id)),
-  );
-
-  const refreshed = await prisma.spreadsheet.findMany({
-    where: { companyId: id },
-    orderBy: { detectedAt: "desc" },
-    select: {
-      id: true,
-      fileName: true,
-      detectedAt: true,
-      totalRows: true,
-      processedRows: true,
-      newRows: true,
-      updatedRows: true,
-      status: true,
-      processMessage: true,
-      sentAt: true,
-    },
-  });
-
-  res.json({ success: true, spreadsheets: refreshed });
+  res.json({ success: true, spreadsheets });
 }
 
 export async function getCompany(req: Request, res: Response): Promise<void> {

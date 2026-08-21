@@ -97,7 +97,7 @@ export type Spreadsheet = {
   processedRows?: number;
   newRows: number;
   updatedRows?: number;
-  status: "processing" | "pending" | "approved" | "sent" | "error" | "no_new_items";
+  status: "queued" | "processing" | "pending" | "approved" | "sent" | "error" | "no_new_items";
   processMessage?: string | null;
   sentAt?: string | null;
 };

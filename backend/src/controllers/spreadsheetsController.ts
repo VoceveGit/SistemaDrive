@@ -544,3 +544,39 @@ export async function sendTestSpreadsheet(req: Request, res: Response): Promise<
     res.status(500).json({ success: false, error: message });
   }
 }
+
+/** Dispara o worker isolado sob demanda (poll só detecta e deixa queued). */
+export async function processSpreadsheet(req: Request, res: Response): Promise<void> {
+  try {
+    const id = paramId(req.params.id);
+    const sheet = await prisma.spreadsheet.findUnique({ where: { id } });
+    if (!sheet) {
+      res.status(404).json({ success: false, error: "Planilha não encontrada" });
+      return;
+    }
+    if (sheet.status === "processing") {
+      res.json({ success: true, message: "Já está processando" });
+      return;
+    }
+    if (sheet.status === "sent") {
+      res.status(400).json({ success: false, error: "Planilha já enviada" });
+      return;
+    }
+
+    await prisma.spreadsheet.update({
+      where: { id },
+      data: {
+        status: "processing",
+        processMessage: "Na fila do worker...",
+      },
+    });
+
+    const { enqueueImportJob } = await import("../services/importJobRunner.js");
+    enqueueImportJob(id);
+
+    res.json({ success: true, message: "Processamento enfileirado no worker" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Erro ao processar";
+    res.status(500).json({ success: false, error: message });
+  }
+}

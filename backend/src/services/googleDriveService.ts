@@ -6,7 +6,6 @@ import path from "path";
 import { google, type drive_v3 } from "googleapis";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
-import { enqueueImportJob } from "./importJobRunner.js";
 import type { Server as SocketServer } from "socket.io";
 import type { Company } from "../../generated/prisma/client.js";
 
@@ -253,8 +252,9 @@ async function pollCompanyFolder(
         processedRows: 0,
         newRows: 0,
         updatedRows: 0,
-        status: "processing",
-        processMessage: "Na fila...",
+        // Detectado apenas — NÃO processa automático (fork no Free ainda pode matar o container)
+        status: "queued",
+        processMessage: "Arquivo detectado — clique em Processar quando o site estiver estável",
         rawData: JSON.stringify({ headers: [], rows: [] }),
         previousSpreadsheetId: existing?.id ?? null,
       },
@@ -269,9 +269,9 @@ async function pollCompanyFolder(
       });
     }
 
-    // Parse/import NUNCA no processo da API — só fork isolado
-    enqueueImportJob(spreadsheet.id);
-
-    console.log(`[Drive] ${companyName}: enfileirado ${file.name} (worker)`);
+    // Processamento pesado NÃO dispara no poll — só via enqueue manual (POST /process)
+    console.log(
+      `[Drive] ${companyName}: detectado ${file.name} (queued, sem worker automático)`,
+    );
   }
 }

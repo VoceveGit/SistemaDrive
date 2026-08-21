@@ -30,6 +30,7 @@ import {
   approveSpreadsheet,
   sendSpreadsheet,
   sendTestSpreadsheet,
+  processSpreadsheet,
 } from "../controllers/spreadsheetsController.js";
 import { getStats, getConnectionStatus } from "../controllers/dashboardController.js";
 
@@ -68,6 +69,7 @@ router.get("/companies/:id/columns", getCompanyColumns);
 router.get("/companies/:id/spreadsheets", getCompanySpreadsheets);
 
 router.get("/spreadsheets/:id/diff", getDiff);
+router.post("/spreadsheets/:id/process", processSpreadsheet);
 router.post("/spreadsheets/:id/approve", approveSpreadsheet);
 router.post("/spreadsheets/:id/send", sendSpreadsheet);
 router.post("/spreadsheets/:id/send-test", sendTestSpreadsheet);
