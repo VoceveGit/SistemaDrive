@@ -143,6 +143,55 @@ function isNumericType(dataType: string): boolean {
   );
 }
 
+/** Normaliza número da planilha para MySQL (DECIMAL/INT). */
+export function normalizeNumericForInsert(raw: string): string | null {
+  let s = raw.trim();
+  if (!s) return null;
+
+  // Remove moeda / espaços / %
+  s = s.replace(/[R$\s%]/gi, "").replace(/\u00a0/g, "");
+
+  const hasComma = s.includes(",");
+  const hasDot = s.includes(".");
+
+  if (hasComma && hasDot) {
+    // Último separador = decimal
+    if (s.lastIndexOf(",") > s.lastIndexOf(".")) {
+      // 10.000,00 (BR)
+      s = s.replace(/\./g, "").replace(",", ".");
+    } else {
+      // 10,000.00 (US) — caso Avinor / Limite Crédito
+      s = s.replace(/,/g, "");
+    }
+  } else if (hasComma && !hasDot) {
+    const parts = s.split(",");
+    if (parts.length === 2 && parts[1].length <= 2) {
+      // 10000,50
+      s = `${parts[0]}.${parts[1]}`;
+    } else {
+      // 10,000 → milhar
+      s = s.replace(/,/g, "");
+    }
+  } else if (hasDot && !hasComma) {
+    const parts = s.split(".");
+    // 10.000.000 (milhar BR repetido)
+    if (parts.length > 2) {
+      s = s.replace(/\./g, "");
+    }
+    // um ponto só: deixa como decimal (10000.00 / 10.5)
+  }
+
+  // sinal negativo em parênteses contábeis: (100) → -100
+  if (/^\(.*\)$/.test(s)) {
+    s = `-${s.slice(1, -1)}`;
+  }
+
+  if (!/^-?\d+(\.\d+)?$/.test(s)) {
+    return null;
+  }
+  return s;
+}
+
 /** Normaliza célula para INSERT — vazio vira NULL em datas e números (MySQL rejeita '' em DECIMAL). */
 export function normalizeCellForInsert(value: string, column: ColumnInfo): string | null {
   const trimmed = value.trim();
@@ -150,7 +199,7 @@ export function normalizeCellForInsert(value: string, column: ColumnInfo): strin
     return normalizeDateCellValue(trimmed, true);
   }
   if (isNumericType(column.data_type)) {
-    return trimmed ? trimmed : null;
+    return trimmed ? normalizeNumericForInsert(trimmed) : null;
   }
   return trimmed || null;
 }
