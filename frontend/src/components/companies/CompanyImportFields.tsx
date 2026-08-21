@@ -1,5 +1,6 @@
 // frontend/src/components/companies/CompanyImportFields.tsx — Config Avinor / leitura / sync
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type ColumnInfo } from "../../lib/api";
 
@@ -48,20 +49,31 @@ export function CompanyImportFields({
   columnMapping,
   onChange,
 }: Props) {
+  const [loadColumns, setLoadColumns] = useState(false);
   const { data: columnsData } = useQuery({
     queryKey: ["columns", companyId, targetTable],
     queryFn: () =>
       api<{ columns: ColumnInfo[] }>(
         `/companies/${companyId}/columns?table=${encodeURIComponent(targetTable)}`,
       ),
-    enabled: Boolean(targetTable),
+    enabled: Boolean(targetTable) && loadColumns,
     retry: false,
+    staleTime: 5 * 60_000,
   });
 
   const columns = columnsData?.columns ?? [];
 
   return (
     <div className="space-y-6">
+      {targetTable && (
+        <button
+          type="button"
+          className="btn-secondary text-sm"
+          onClick={() => setLoadColumns(true)}
+        >
+          Carregar colunas do banco (opcional)
+        </button>
+      )}
       <section className="space-y-3">
         <h3 className="text-sm font-semibold text-text-primary">Leitura da planilha</h3>
         <div className="grid gap-3 sm:grid-cols-3">
