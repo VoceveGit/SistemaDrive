@@ -52,8 +52,9 @@ export function CompanyDrawer({ company, onClose }: CompanyDrawerProps) {
     mutationFn: (spreadsheetId: string) =>
       api(`/spreadsheets/${spreadsheetId}/process`, { method: "POST" }),
     onSuccess: () => {
-      toast.success("Processamento iniciado no worker");
+      toast.success("Reprocessando com a configuração atual…");
       queryClient.invalidateQueries({ queryKey: ["spreadsheets", company.id] });
+      queryClient.invalidateQueries({ queryKey: ["diff"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -165,10 +166,13 @@ function SpreadsheetRow({
   onToggle: () => void;
 }) {
   const isProcessing = sheet.status === "processing";
-  const isQueued =
+  const canReprocess =
     sheet.status === "queued" ||
     sheet.status === "error" ||
-    sheet.status === "processing";
+    sheet.status === "processing" ||
+    sheet.status === "pending" ||
+    sheet.status === "approved" ||
+    sheet.status === "no_new_items";
   const progress =
     sheet.totalRows > 0
       ? `${formatNumber(sheet.processedRows ?? 0)} / ${formatNumber(sheet.totalRows)}`
@@ -214,22 +218,25 @@ function SpreadsheetRow({
           </span>
         </td>
         <td className="px-4 py-3 text-text-secondary" onClick={(e) => e.stopPropagation()}>
-          {isQueued ? (
-            <button
-              type="button"
-              disabled={processingBusy}
-              onClick={onProcess}
-              className="inline-flex items-center gap-1 rounded-lg bg-accent-blue px-2.5 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
-            >
-              <Play size={12} /> Processar
-            </button>
-          ) : !isProcessing ? (
-            isExpanded ? (
-              <ChevronUp size={18} />
-            ) : (
-              <ChevronDown size={18} />
-            )
-          ) : null}
+          <div className="flex items-center gap-2">
+            {canReprocess && (
+              <button
+                type="button"
+                disabled={processingBusy}
+                onClick={onProcess}
+                title="Relê o arquivo do Drive com a config atual (linhas, ignore, etc.)"
+                className="inline-flex items-center gap-1 rounded-lg bg-accent-blue px-2.5 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                <Play size={12} />{" "}
+                {sheet.status === "pending" || sheet.status === "approved"
+                  ? "Reprocessar"
+                  : "Processar"}
+              </button>
+            )}
+            {!isProcessing && sheet.status !== "queued" && (
+              isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />
+            )}
+          </div>
         </td>
       </tr>
       {isExpanded && (

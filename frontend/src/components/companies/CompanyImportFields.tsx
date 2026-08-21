@@ -142,35 +142,69 @@ export function CompanyImportFields({
           label="Ignorar linhas por valor"
         />
         {ignoreRules.enabled && (
-          <div className="grid gap-3 sm:grid-cols-2 pl-1">
-            <label className="block">
-              <span className="mb-1.5 block text-sm text-text-secondary">Coluna</span>
-              <input
-                className="input"
-                value={ignoreRules.column}
-                placeholder="ex: Descrição"
-                onChange={(e) =>
-                  onChange({
-                    ignoreRules: { ...ignoreRules, column: e.target.value },
-                  })
-                }
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1.5 block text-sm text-text-secondary">
-                Valores (separados por vírgula)
-              </span>
-              <input
-                className="input"
-                value={ignoreRules.valuesText}
-                placeholder="TOTAL DO DIA, TOTAL GERAL"
-                onChange={(e) =>
-                  onChange({
-                    ignoreRules: { ...ignoreRules, valuesText: e.target.value },
-                  })
-                }
-              />
-            </label>
+          <div className="space-y-3 pl-1">
+            <p className="text-xs text-text-muted">
+              Ex.: coluna C (Descrição) — ignora linhas com &quot;TOTAL DO DIA&quot;. Use a letra
+              quando o nome for confuso.
+            </p>
+            <button
+              type="button"
+              className="btn-secondary text-sm"
+              onClick={() => setLoadSheetHeaders(true)}
+            >
+              Carregar colunas da planilha (para escolher)
+            </button>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1.5 block text-sm text-text-secondary">
+                  Coluna (letra ou nome)
+                </span>
+                {sheetColumns.length > 0 ? (
+                  <select
+                    className="input"
+                    value={ignoreRules.column}
+                    onChange={(e) =>
+                      onChange({
+                        ignoreRules: { ...ignoreRules, column: e.target.value },
+                      })
+                    }
+                  >
+                    <option value="">Selecione</option>
+                    {sheetColumns.map((c) => (
+                      <option key={`ign-${c.letter}`} value={c.letter}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="input"
+                    value={ignoreRules.column}
+                    placeholder="ex: C ou Descrição"
+                    onChange={(e) =>
+                      onChange({
+                        ignoreRules: { ...ignoreRules, column: e.target.value },
+                      })
+                    }
+                  />
+                )}
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm text-text-secondary">
+                  Valores (separados por vírgula)
+                </span>
+                <input
+                  className="input"
+                  value={ignoreRules.valuesText}
+                  placeholder="TOTAL DO DIA, TOTAL GERAL"
+                  onChange={(e) =>
+                    onChange({
+                      ignoreRules: { ...ignoreRules, valuesText: e.target.value },
+                    })
+                  }
+                />
+              </label>
+            </div>
           </div>
         )}
       </section>

@@ -102,7 +102,9 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
         }),
       }),
     onSuccess: () => {
-      toast.success("Configurações salvas");
+      toast.success(
+        "Configurações salvas. Clique em Reprocessar na planilha para aplicar (linhas/ignore/etc.).",
+      );
       queryClient.invalidateQueries({ queryKey: ["companies"] });
       queryClient.invalidateQueries({ queryKey: ["companies-all"] });
       onClose();

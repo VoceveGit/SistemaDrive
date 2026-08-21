@@ -2,6 +2,7 @@
 
 import * as XLSX from "xlsx";
 import type { ParsedSpreadsheet } from "./diffService.js";
+import { excelLetterToIndex } from "../utils/columnMapping.js";
 
 export type IgnoreRules = {
   column: string;
@@ -19,6 +20,29 @@ export type SheetParseOptions = {
 
 function normalizeIgnoreToken(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Resolve coluna de ignore: letra Excel (C, AF) ou nome do cabeçalho.
+ * Com keepIdx (após limpar headers vazios), a letra é mapeada para o índice limpo.
+ */
+export function resolveIgnoreColumnIndex(
+  column: string,
+  headers: string[],
+  originalKeepIdx?: number[],
+): number {
+  const key = column.trim();
+  if (!key) return -1;
+
+  const letterIdx = excelLetterToIndex(key);
+  if (letterIdx != null) {
+    if (originalKeepIdx && originalKeepIdx.length > 0) {
+      return originalKeepIdx.indexOf(letterIdx);
+    }
+    return letterIdx;
+  }
+
+  return headers.findIndex((h) => h.toLowerCase() === key.toLowerCase());
 }
 
 function applyAutofill(rows: string[][]): string[][] {
@@ -95,9 +119,7 @@ export function parseWorkbookBuffer(
 
   const ignore = options.ignoreRules;
   if (ignore?.column && ignore.values?.length) {
-    const colIdx = headers.findIndex(
-      (h) => h.toLowerCase() === ignore.column.trim().toLowerCase(),
-    );
+    const colIdx = resolveIgnoreColumnIndex(ignore.column, headers);
     if (colIdx >= 0) {
       const banned = new Set(ignore.values.map(normalizeIgnoreToken));
       rows = rows.filter((row) => {

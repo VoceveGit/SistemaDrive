@@ -9,6 +9,8 @@ import { Readable } from "stream";
 import type { drive_v3 } from "googleapis";
 import ExcelJS from "exceljs";
 import type { SheetParseOptions } from "./sheetParseService.js";
+import { resolveIgnoreColumnIndex } from "./sheetParseService.js";
+import { excelLetterToIndex } from "../utils/columnMapping.js";
 
 function normalizeIgnoreToken(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -123,7 +125,13 @@ export async function streamXlsxInBatches(
   let colCount = 0;
   let lastFilled: string[] = [];
   let ignoreColIdx = -1;
+  let ignoreLetterRawIdx: number | null = null;
   let banned: Set<string> | null = null;
+
+  if (ignore?.column && ignore.values?.length) {
+    banned = new Set(ignore.values.map(normalizeIgnoreToken));
+    ignoreLetterRawIdx = excelLetterToIndex(ignore.column.trim());
+  }
 
   let batch: string[][] = [];
   let totalRows = 0;
@@ -177,10 +185,8 @@ export async function streamXlsxInBatches(
           .map(({ i }) => i);
         headers = keepIdx.map((i) => headers[i] ?? "");
         lastFilled = Array(headers.length).fill("");
-        if (ignore?.column && ignore.values?.length) {
-          ignoreColIdx = headers.findIndex(
-            (h) => h.toLowerCase() === ignore.column.trim().toLowerCase(),
-          );
+        if (ignore?.column && ignore.values?.length && ignoreLetterRawIdx == null) {
+          ignoreColIdx = resolveIgnoreColumnIndex(ignore.column, headers, keepIdx);
           banned = new Set(ignore.values.map(normalizeIgnoreToken));
         }
         await onHeaders?.(headers);
@@ -191,6 +197,13 @@ export async function streamXlsxInBatches(
       if (headers.length === 0) continue;
 
       while (cells.length < colCount) cells.push("");
+
+      // Ignore por letra Excel (posição original, antes do keepIdx)
+      if (ignoreLetterRawIdx != null && banned) {
+        const cell = normalizeIgnoreToken(cells[ignoreLetterRawIdx] ?? "");
+        if (banned.has(cell)) continue;
+      }
+
       let rowVals = keepIdx.map((i) => cells[i] ?? "");
 
       if (autofill) {
@@ -205,7 +218,7 @@ export async function streamXlsxInBatches(
 
       if (skipEmpty && isRowEmpty(rowVals)) continue;
 
-      if (ignoreColIdx >= 0 && banned) {
+      if (ignoreLetterRawIdx == null && ignoreColIdx >= 0 && banned) {
         const cell = normalizeIgnoreToken(rowVals[ignoreColIdx] ?? "");
         if (banned.has(cell)) continue;
       }
@@ -269,7 +282,12 @@ export async function streamCsvInBatches(
   let keepIdx: number[] = [];
   let lastFilled: string[] = [];
   let ignoreColIdx = -1;
+  let ignoreLetterRawIdx: number | null = null;
   let banned: Set<string> | null = null;
+  if (ignore?.column && ignore.values?.length) {
+    banned = new Set(ignore.values.map(normalizeIgnoreToken));
+    ignoreLetterRawIdx = excelLetterToIndex(ignore.column.trim());
+  }
   let batch: string[][] = [];
   let totalRows = 0;
   let lineNo = 0;
@@ -299,10 +317,8 @@ export async function streamCsvInBatches(
         .map(({ i }) => i);
       headers = keepIdx.map((i) => headers[i] ?? "");
       lastFilled = Array(headers.length).fill("");
-      if (ignore?.column && ignore.values?.length) {
-        ignoreColIdx = headers.findIndex(
-          (h) => h.toLowerCase() === ignore.column.trim().toLowerCase(),
-        );
+      if (ignore?.column && ignore.values?.length && ignoreLetterRawIdx == null) {
+        ignoreColIdx = resolveIgnoreColumnIndex(ignore.column, headers, keepIdx);
         banned = new Set(ignore.values.map(normalizeIgnoreToken));
       }
       await onHeaders?.(headers);
@@ -310,6 +326,11 @@ export async function streamCsvInBatches(
     }
 
     if (lineNo < dataStartNum || headers.length === 0) continue;
+
+    if (ignoreLetterRawIdx != null && banned) {
+      const cell = normalizeIgnoreToken(String(cells[ignoreLetterRawIdx] ?? "").trim());
+      if (banned.has(cell)) continue;
+    }
 
     let rowVals = keepIdx.map((i) => String(cells[i] ?? "").trim());
     if (autofill) {
@@ -322,7 +343,7 @@ export async function streamCsvInBatches(
       });
     }
     if (skipEmpty && isRowEmpty(rowVals)) continue;
-    if (ignoreColIdx >= 0 && banned) {
+    if (ignoreLetterRawIdx == null && ignoreColIdx >= 0 && banned) {
       const cell = normalizeIgnoreToken(rowVals[ignoreColIdx] ?? "");
       if (banned.has(cell)) continue;
     }
