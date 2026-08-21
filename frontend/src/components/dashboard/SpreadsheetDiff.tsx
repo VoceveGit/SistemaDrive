@@ -162,10 +162,13 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
     report?: SendReport;
   }) => {
     if (res.report) setLastReport(res.report);
-    if (res.completed) {
-      toast.success("Planilha concluída e marcada como enviada");
+    const n = res.insertedCount ?? res.report?.insertedCount ?? 0;
+    if (n <= 0 && !res.completed) {
+      toast.error("Nada foi inserido no MySQL — confira o mapeamento/logs");
+    } else if (res.completed) {
+      toast.success(`Concluído: ${n} linha(s) no destino`);
     } else {
-      toast.success(`${res.insertedCount ?? 0} linha(s) enviada(s)`);
+      toast.success(`${n} linha(s) inserida(s) no MySQL`);
     }
     invalidateAfterSend();
   };

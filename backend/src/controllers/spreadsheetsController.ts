@@ -243,7 +243,12 @@ export async function sendRows(
   spreadsheetId: string,
   rowsToSend: string[][],
   userEmail?: string,
-  options?: { applyUpdates?: boolean; isSnapshot?: boolean },
+  options?: {
+    applyUpdates?: boolean;
+    isSnapshot?: boolean;
+    /** Linhas vindas da UI (paginação/staging) — não filtrar pelo preview do Neon. */
+    trustProvidedRows?: boolean;
+  },
 ): Promise<{
   insertedCount: number;
   updatedCount: number;
@@ -258,6 +263,17 @@ export async function sendRows(
   const company = spreadsheet.company;
   const applyUpdates = options?.applyUpdates !== false;
   const syncMode = company.syncMode || "incremental";
+  const trustProvidedRows = Boolean(options?.trustProvidedRows);
+
+  let stagingMeta = false;
+  try {
+    stagingMeta = Boolean(
+      (JSON.parse(spreadsheet.rawData) as { staging?: boolean }).staging,
+    );
+  } catch {
+    /* ignore */
+  }
+  const usesStaging = stagingMeta || Boolean(company.useStagingTable);
 
   if (!company.targetTable) {
     throw new Error("Tabela destino não configurada para esta empresa");
@@ -282,7 +298,13 @@ export async function sendRows(
     );
     await prisma.spreadsheet.update({
       where: { id: spreadsheetId },
-      data: { status: "sent", sentAt: new Date(), sentBy: userEmail, newRows: insertedCount, updatedRows: 0 },
+      data: {
+        status: "sent",
+        sentAt: new Date(),
+        sentBy: userEmail,
+        newRows: insertedCount,
+        updatedRows: 0,
+      },
     });
     const dbTableRowCount = await countTableRows(dbSettings, company.targetTable);
     return {
@@ -304,26 +326,41 @@ export async function sendRows(
     };
   }
 
-  const pendingRows = getMustSendRows(diff);
-  const pendingKey = (row: string[]) => JSON.stringify(row);
-  const pendingSet = new Set(pendingRows.map(pendingKey));
-  const safeRows = rowsToSend.filter((row) => pendingSet.has(pendingKey(row)));
+  // Preview no Neon só tem ~300 linhas. Envio 1/selecionados da UI traz a linha real —
+  // NÃO filtrar pelo diff do preview (senão safeRows fica vazio e o MySQL não recebe nada).
+  let safeRows: string[][];
+  if (trustProvidedRows) {
+    safeRows = rowsToSend.filter((r) => Array.isArray(r) && r.length > 0);
+  } else {
+    const pendingRows = getMustSendRows(diff);
+    const pendingKey = (row: string[]) => JSON.stringify(row);
+    const pendingSet = new Set(pendingRows.map(pendingKey));
+    safeRows = rowsToSend.filter((row) => pendingSet.has(pendingKey(row)));
+  }
+
+  if (safeRows.length === 0) {
+    throw new Error(
+      "Nenhuma linha válida para inserir. Recarregue o comparativo e tente de novo.",
+    );
+  }
 
   let insertedCount = 0;
   let insertSkipped: string[] = [];
 
-  if (safeRows.length > 0) {
-    const { headers, rows } = mapRowsForDb(current.headers, safeRows, mapping);
-    const result = await insertRows(
-      dbSettings,
-      company.targetTable,
-      headers,
-      rows,
-      company.primaryKeyColumn,
-    );
-    insertedCount = result.insertedCount;
-    insertSkipped = result.skippedColumns;
-  }
+  const { headers, rows } = mapRowsForDb(current.headers, safeRows, mapping);
+  console.log(
+    `[send] ${spreadsheetId} inserindo ${rows.length} linha(s) em ${company.targetTable} (trust=${trustProvidedRows})`,
+  );
+  const result = await insertRows(
+    dbSettings,
+    company.targetTable,
+    headers,
+    rows,
+    company.primaryKeyColumn,
+  );
+  insertedCount = result.insertedCount;
+  insertSkipped = result.skippedColumns;
+  console.log(`[send] ${spreadsheetId} insert OK: ${insertedCount} linha(s)`);
 
   let updatedCount = 0;
   if (applyUpdates && syncMode === "incremental_update" && company.compareColumn) {
@@ -339,7 +376,6 @@ export async function sendRows(
         (mapping?.[h] ?? h).toLowerCase() === mappedPrincipal.toLowerCase(),
     );
 
-    // Uma atualização por valor de chave principal (cascata)
     const doneKeys = new Set<string>();
     for (const row of updateRows) {
       if (!principalHeader || row.changes.length === 0) continue;
@@ -374,36 +410,49 @@ export async function sendRows(
     }
   }
 
-  const afterCtx = await loadSpreadsheetContext(spreadsheetId);
-  if (!afterCtx) throw new Error("Erro ao verificar status da planilha");
+  // Com staging/preview truncado, o diff do Neon NÃO representa o job inteiro.
+  // Envio parcial nunca deve marcar a planilha como "sent" / completed.
+  let completed = false;
+  let mustSendRemaining = 0;
+  let mustUpdateRemaining = 0;
+  let alreadyInDb = 0;
 
-  const remainingSend = afterCtx.diff.summary.mustSend;
-  const remainingUpdate = afterCtx.diff.summary.mustUpdate;
-  const completed = remainingSend === 0 && remainingUpdate === 0;
+  if (usesStaging || trustProvidedRows) {
+    completed = false;
+    mustSendRemaining = Math.max(0, (spreadsheet.totalRows || 0) - insertedCount);
+    console.log(
+      `[send] ${spreadsheetId} parcial: inserted=${insertedCount} (não marca sent — job staging/parcial)`,
+    );
+  } else {
+    const afterCtx = await loadSpreadsheetContext(spreadsheetId);
+    if (!afterCtx) throw new Error("Erro ao verificar status da planilha");
+    mustSendRemaining = afterCtx.diff.summary.mustSend;
+    mustUpdateRemaining = afterCtx.diff.summary.mustUpdate ?? 0;
+    alreadyInDb = afterCtx.diff.summary.alreadyInDb;
+    completed = mustSendRemaining === 0 && mustUpdateRemaining === 0;
 
-  if (completed) {
-    await prisma.spreadsheet.update({
-      where: { id: spreadsheetId },
-      data: {
-        status: "sent",
-        sentAt: new Date(),
-        sentBy: userEmail,
-      },
-    });
+    if (completed) {
+      await prisma.spreadsheet.update({
+        where: { id: spreadsheetId },
+        data: {
+          status: "sent",
+          sentAt: new Date(),
+          sentBy: userEmail,
+        },
+      });
+    }
   }
 
   const dbTableRowCount = await countTableRows(dbSettings, company.targetTable);
-  const skippedColumns = [
-    ...new Set([...insertSkipped, ...afterCtx.diff.skippedColumns]),
-  ];
+  const skippedColumns = [...new Set([...insertSkipped, ...diff.skippedColumns])];
 
   const report: SendReport = {
-    spreadsheetRows: current.rows.length,
+    spreadsheetRows: usesStaging ? spreadsheet.totalRows : current.rows.length,
     insertedCount,
     updatedCount,
-    mustSendRemaining: remainingSend,
-    mustUpdateRemaining: remainingUpdate,
-    alreadyInDb: afterCtx.diff.summary.alreadyInDb,
+    mustSendRemaining,
+    mustUpdateRemaining,
+    alreadyInDb,
     skippedColumns,
     dbTableRowCount,
     completed,
@@ -607,10 +656,13 @@ export async function sendTestSpreadsheet(req: Request, res: Response): Promise<
       return;
     }
 
-    const result = await sendRows(id, rowsToSend, req.user?.email);
+    const result = await sendRows(id, rowsToSend, req.user?.email, {
+      trustProvidedRows: true,
+    });
     res.json({ success: true, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro no envio teste";
+    console.error(`[send-test] ${paramId(req.params.id)}:`, message);
     res.status(500).json({ success: false, error: message });
   }
 }
