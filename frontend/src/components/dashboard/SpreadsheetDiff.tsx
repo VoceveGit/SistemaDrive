@@ -90,6 +90,13 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
           setJobTotal(total);
         }
 
+        // Snapshot de solução codada: só resumo, não pagina linhas
+        if (page.codedSolution && page.snapshot) {
+          setRows([]);
+          setJobTotal(page.snapshot.insertedRowCount);
+          break;
+        }
+
         accumulated = [...accumulated, ...page.rows];
         setRows(accumulated);
         setJobTotal(page.pagination?.total ?? total);
@@ -255,6 +262,7 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
   }
 
   const diff = meta;
+  const snapshot = diff.snapshot;
   let mustSendCounter = -1;
   const canSend = summary.mustSend > 0 || (summary.mustUpdate ?? 0) > 0;
   const sending =
@@ -273,6 +281,50 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
       return;
     }
     sendSelectedMutation.mutate();
+  }
+
+  if (diff.codedSolution && snapshot) {
+    return (
+      <div className="min-w-0 max-w-full border-t border-border bg-bg-surface p-4">
+        <div className="rounded-xl border border-accent-green/30 bg-accent-green/10 p-6">
+          <h3 className="text-base font-semibold text-text-primary">
+            Snapshot — {snapshot.codedSolutionId}
+          </h3>
+          <p className="mt-2 text-sm text-text-secondary">{snapshot.note}</p>
+          <ul className="mt-4 space-y-2 text-sm text-text-secondary">
+            <li>
+              Tabela:{" "}
+              <strong className="font-mono text-text-primary">{snapshot.targetTable}</strong>
+            </li>
+            <li>
+              Antes do envio:{" "}
+              <strong className="text-text-primary">
+                {formatNumber(snapshot.previousRowCount)}
+              </strong>{" "}
+              registros
+            </li>
+            <li>
+              Gravados agora:{" "}
+              <strong className="text-accent-green">
+                {formatNumber(snapshot.insertedRowCount)}
+              </strong>{" "}
+              registros
+            </li>
+            <li>
+              Depois do envio:{" "}
+              <strong className="text-text-primary">
+                {formatNumber(snapshot.finalRowCount)}
+              </strong>{" "}
+              registros
+            </li>
+          </ul>
+          <p className="mt-4 text-xs text-text-muted">
+            Modo snapshot: a tabela foi substituída por completo (espelho + transação). Não há
+            lista linha a linha.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (

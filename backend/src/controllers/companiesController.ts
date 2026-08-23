@@ -172,6 +172,12 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
         ...(body.useStagingTable !== undefined && {
           useStagingTable: Boolean(body.useStagingTable),
         }),
+        ...(body.useCodedSolution !== undefined && {
+          useCodedSolution: Boolean(body.useCodedSolution),
+        }),
+        ...(body.codedSolutionId !== undefined && {
+          codedSolutionId: body.codedSolutionId ? String(body.codedSolutionId) : null,
+        }),
       },
     });
 

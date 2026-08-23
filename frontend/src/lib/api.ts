@@ -82,6 +82,8 @@ export type Company = {
   syncMode?: string;
   useDateFilter?: boolean;
   useStagingTable?: boolean;
+  useCodedSolution?: boolean;
+  codedSolutionId?: string | null;
   totalSpreadsheets: number;
   pendingSpreadsheets: number;
   todaySpreadsheets: number;
@@ -142,6 +144,16 @@ export type DiffResult = {
   truncated?: boolean;
   note?: string;
   staging?: boolean;
+  codedSolution?: boolean;
+  snapshot?: {
+    mode: string;
+    previousRowCount: number;
+    insertedRowCount: number;
+    finalRowCount: number;
+    targetTable: string;
+    note: string;
+    codedSolutionId: string;
+  };
   processMessage?: string | null;
   pagination?: {
     offset: number;

@@ -63,6 +63,14 @@ router.get("/companies", listCompanies);
 router.get("/companies/all", listAllCompanies);
 router.get("/companies/tables-preview", getTablesPreview);
 router.get("/companies/columns-preview", getColumnsPreview);
+router.get("/coded-solutions", (_req, res) => {
+  void import("../solucoesAvinor/index.js").then(({ listCodedSolutions }) => {
+    res.json({ success: true, solutions: listCodedSolutions() });
+  }).catch((e: unknown) => {
+    const message = e instanceof Error ? e.message : "Erro ao listar soluções";
+    res.status(500).json({ success: false, error: message });
+  });
+});
 router.post("/companies", createCompany);
 router.get("/companies/:id", getCompany);
 router.put("/companies/:id", updateCompany);

@@ -18,6 +18,7 @@ import {
   streamSheetFileInBatches,
 } from "./streamSheetService.js";
 import { getDriveClientForImport } from "./googleDriveService.js";
+import { companyUsesCodedSolution } from "../solucoesAvinor/index.js";
 
 const BATCH_SIZE = 500;
 const MAX_PREVIEW_ROWS = 300;
@@ -35,6 +36,7 @@ async function setProgress(
     status?: string;
     processMessage?: string | null;
     rawData?: string;
+    sentAt?: Date;
   },
 ): Promise<void> {
   await prisma.spreadsheet.update({ where: { id: spreadsheetId }, data });
@@ -93,6 +95,59 @@ export async function runChunkedImport(params: {
   let tmpPath: string | null = null;
 
   try {
+    // Solução codada: snapshot completo (download + espelho + troca) — sem rawData pesado no Neon
+    const coded = companyUsesCodedSolution(company);
+    if (coded) {
+      const dbSettings = await getAppDbSettings();
+      if (!dbSettings) {
+        throw new Error("Banco de destino não configurado");
+      }
+      await setProgress(spreadsheetId, {
+        processMessage: `Solução codada: ${coded.label}...`,
+      });
+      const result = await coded.runSnapshot({
+        spreadsheetId,
+        company,
+        drive,
+        file,
+        dbSettings,
+        onProgress: async (message, processed) => {
+          await setProgress(spreadsheetId, {
+            processMessage: message,
+            ...(processed != null ? { processedRows: processed, totalRows: processed } : {}),
+          });
+        },
+      });
+      const { summary } = result;
+      await setProgress(spreadsheetId, {
+        status: "sent",
+        sentAt: new Date(),
+        totalRows: summary.insertedRowCount,
+        processedRows: summary.insertedRowCount,
+        newRows: summary.insertedRowCount,
+        updatedRows: 0,
+        processMessage: summary.note,
+        rawData: JSON.stringify({
+          headers: result.headers,
+          rows: [],
+          staging: false,
+          codedSolution: true,
+          snapshot: summary,
+          note: summary.note,
+        }),
+      });
+      console.log(
+        `[coded] ${coded.id} OK: ${summary.previousRowCount} → ${summary.finalRowCount} (${fileName})`,
+      );
+      emit?.("new_spreadsheet", {
+        companyId: company.id,
+        companyName,
+        fileName,
+        spreadsheetId,
+      });
+      return;
+    }
+
     await setProgress(spreadsheetId, {
       processMessage: "Baixando arquivo do Drive...",
     });

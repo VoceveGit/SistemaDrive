@@ -78,6 +78,16 @@ model Company {
    */
   useStagingTable  Boolean  @default(false)
 
+  /**
+   * Solução codada (ex.: Avinor Clientes): ignora mapeamento genérico da UI.
+   * O motor vive em backend/src/solucoesAvinor/.
+   */
+  useCodedSolution Boolean  @default(false)
+  /** Ex.: avinor_clientes | avinor_faturamento (futuro) */
+  codedSolutionId  String?
+  /** md5Checksum do último arquivo processado com sucesso (poll leve no Drive) */
+  lastDriveFileChecksum String?
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   spreadsheets     Spreadsheet[]

@@ -1,7 +1,7 @@
 // frontend/src/components/companies/CompanySettingsModal.tsx
 
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { toast } from "sonner";
 import { api, type Company } from "../../lib/api";
@@ -62,9 +62,27 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
   const [syncMode, setSyncMode] = useState(company.syncMode ?? "incremental");
   const [useDateFilter, setUseDateFilter] = useState(company.useDateFilter ?? false);
   const [useStagingTable, setUseStagingTable] = useState(company.useStagingTable ?? false);
+  const [useCodedSolution, setUseCodedSolution] = useState(company.useCodedSolution ?? false);
+  const [codedSolutionId, setCodedSolutionId] = useState(company.codedSolutionId ?? "");
   const [columnMapping, setColumnMapping] = useState<MappingPair[]>(() =>
     mappingToPairs(company.columnMapping),
   );
+
+  const { data: codedSolutionsData } = useQuery({
+    queryKey: ["coded-solutions"],
+    queryFn: () =>
+      api<{
+        solutions: Array<{
+          id: string;
+          label: string;
+          description: string;
+          defaultTargetTable: string;
+        }>;
+      }>("/coded-solutions"),
+    staleTime: 5 * 60_000,
+  });
+  const codedSolutions = codedSolutionsData?.solutions ?? [];
+  const selectedCoded = codedSolutions.find((s) => s.id === codedSolutionId);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -98,12 +116,16 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
           syncMode,
           useDateFilter,
           useStagingTable,
+          useCodedSolution,
+          codedSolutionId: useCodedSolution && codedSolutionId ? codedSolutionId : null,
           columnMapping: pairsToMapping(columnMapping),
         }),
       }),
     onSuccess: () => {
       toast.success(
-        "Configurações salvas. Clique em Reprocessar na planilha para aplicar (linhas/ignore/etc.).",
+        useCodedSolution
+          ? "Solução codada salva. Selecione o arquivo no Drive e clique em Carregar."
+          : "Configurações salvas. Clique em Reprocessar na planilha para aplicar (linhas/ignore/etc.).",
       );
       queryClient.invalidateQueries({ queryKey: ["companies"] });
       queryClient.invalidateQueries({ queryKey: ["companies-all"] });
@@ -117,7 +139,11 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
   }, [company.targetTable, targetTable]);
 
   const handleSave = () => {
-    if (!confirmSaveWithoutDate(dateColumn)) return;
+    if (useCodedSolution && !codedSolutionId) {
+      toast.error("Selecione a solução codada (ex.: Clientes Avinor)");
+      return;
+    }
+    if (!useCodedSolution && !confirmSaveWithoutDate(dateColumn)) return;
     mutation.mutate();
   };
 
@@ -222,25 +248,96 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
           )}
 
           {tab === "importacao" && (
-            <CompanyImportFields
-              companyId={company.id}
-              targetTable={targetTable}
-              headerRow={headerRow}
-              dataRow={dataRow}
-              sheetName={sheetName}
-              autofillEmpty={autofillEmpty}
-              skipEmptyRows={skipEmptyRows}
-              ignoreRules={ignoreRules}
-              fileMode={fileMode}
-              exactFileName={exactFileName}
-              syncMode={syncMode}
-              useDateFilter={useDateFilter}
-              useStagingTable={useStagingTable}
-              dateColumn={dateColumn}
-              compareColumn={compareColumn}
-              columnMapping={columnMapping}
-              onChange={applyImportPatch}
-            />
+            <div className="space-y-6">
+              <section className="space-y-3 rounded-lg border border-accent-blue/30 bg-accent-blue/5 p-4">
+                <h3 className="text-sm font-semibold text-text-primary">
+                  Solução codada (personalizada)
+                </h3>
+                <p className="text-xs text-text-secondary">
+                  Quando ativa, o mapeamento genérico abaixo é ignorado. O motor fixo no código
+                  faz o snapshot (espelho + troca) ao carregar o arquivo.
+                </p>
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={useCodedSolution}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      setUseCodedSolution(on);
+                      if (on && !codedSolutionId && codedSolutions[0]) {
+                        setCodedSolutionId(codedSolutions[0].id);
+                        if (!targetTable) {
+                          setTargetTable(codedSolutions[0].defaultTargetTable);
+                        }
+                      }
+                    }}
+                    className="mt-1"
+                  />
+                  <span className="text-sm text-text-primary">
+                    Usar solução codada
+                  </span>
+                </label>
+                {useCodedSolution && (
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm text-text-secondary">
+                      Qual solução
+                    </span>
+                    <select
+                      className="input"
+                      value={codedSolutionId}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        setCodedSolutionId(id);
+                        const sol = codedSolutions.find((s) => s.id === id);
+                        if (sol && (!targetTable || targetTable === "base_clientes_avinor")) {
+                          setTargetTable(sol.defaultTargetTable);
+                        }
+                      }}
+                    >
+                      <option value="">Selecione…</option>
+                      {codedSolutions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedCoded && (
+                      <p className="mt-2 text-xs text-text-secondary">
+                        {selectedCoded.description}
+                      </p>
+                    )}
+                  </label>
+                )}
+              </section>
+
+              {!useCodedSolution && (
+                <CompanyImportFields
+                  companyId={company.id}
+                  targetTable={targetTable}
+                  headerRow={headerRow}
+                  dataRow={dataRow}
+                  sheetName={sheetName}
+                  autofillEmpty={autofillEmpty}
+                  skipEmptyRows={skipEmptyRows}
+                  ignoreRules={ignoreRules}
+                  fileMode={fileMode}
+                  exactFileName={exactFileName}
+                  syncMode={syncMode}
+                  useDateFilter={useDateFilter}
+                  useStagingTable={useStagingTable}
+                  dateColumn={dateColumn}
+                  compareColumn={compareColumn}
+                  columnMapping={columnMapping}
+                  onChange={applyImportPatch}
+                />
+              )}
+              {useCodedSolution && (
+                <p className="text-xs text-text-muted">
+                  Configurações genéricas (linha do título, mapeamento, etc.) ficam ocultas
+                  enquanto a solução codada estiver ativa.
+                </p>
+              )}
+            </div>
           )}
         </div>
 

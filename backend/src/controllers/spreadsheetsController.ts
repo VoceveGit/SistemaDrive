@@ -126,6 +126,67 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    // Snapshot de solução codada: só resumo (sem tabela de 15k linhas)
+    try {
+      const rawSnap = JSON.parse(spreadsheet.rawData) as {
+        codedSolution?: boolean;
+        snapshot?: {
+          mode: string;
+          previousRowCount: number;
+          insertedRowCount: number;
+          finalRowCount: number;
+          targetTable: string;
+          note: string;
+          codedSolutionId: string;
+        };
+        note?: string;
+        headers?: string[];
+      };
+      if (rawSnap.codedSolution && rawSnap.snapshot) {
+        const s = rawSnap.snapshot;
+        res.json({
+          success: true,
+          headers: rawSnap.headers ?? [],
+          rows: [],
+          summary: {
+            totalRows: s.insertedRowCount,
+            newRows: s.insertedRowCount,
+            previousRows: s.previousRowCount,
+            alreadyInDb: 0,
+            mustSend: 0,
+            mustUpdate: 0,
+            jobTotalRows: s.insertedRowCount,
+          },
+          dbWindowDays: 0,
+          dateColumnUsed: null,
+          compareColumnUsed: null,
+          dbCompareLimit: null,
+          dbCompareMode: "snapshot",
+          dbCheckSkipped: false,
+          skippedColumns: [],
+          dbRowsLoaded: s.previousRowCount,
+          syncMode: "snapshot",
+          truncated: false,
+          note: s.note,
+          staging: false,
+          codedSolution: true,
+          snapshot: s,
+          processMessage: spreadsheet.processMessage,
+          pagination: {
+            offset: 0,
+            limit: 0,
+            loaded: 0,
+            total: s.insertedRowCount,
+            hasMore: false,
+            nextOffset: null,
+          },
+        });
+        return;
+      }
+    } catch {
+      /* segue fluxo normal */
+    }
+
     let truncated = false;
     let note: string | undefined;
     let staging = false;
