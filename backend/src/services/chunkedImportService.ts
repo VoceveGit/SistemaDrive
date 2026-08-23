@@ -105,7 +105,7 @@ export async function runChunkedImport(params: {
       await setProgress(spreadsheetId, {
         processMessage: `Solução codada: ${coded.label}...`,
       });
-      const result = await coded.runSnapshot({
+      const result = await coded.runImport({
         spreadsheetId,
         company,
         drive,
@@ -118,26 +118,70 @@ export async function runChunkedImport(params: {
           });
         },
       });
-      const { summary } = result;
+
+      // Snapshot (clientes): grava direto, status sent
+      if (coded.autoCommitOnImport && result.summary) {
+        const { summary } = result;
+        await setProgress(spreadsheetId, {
+          status: "sent",
+          sentAt: new Date(),
+          totalRows: summary.insertedRowCount,
+          processedRows: summary.insertedRowCount,
+          newRows: summary.insertedRowCount,
+          updatedRows: 0,
+          processMessage: summary.note,
+          rawData: JSON.stringify({
+            headers: result.headers,
+            rows: [],
+            staging: false,
+            codedSolution: true,
+            snapshot: summary,
+            note: summary.note,
+          }),
+        });
+        console.log(
+          `[coded] ${coded.id} OK: ${summary.previousRowCount} → ${summary.finalRowCount} (${fileName})`,
+        );
+        emit?.("new_spreadsheet", {
+          companyId: company.id,
+          companyName,
+          fileName,
+          spreadsheetId,
+        });
+        return;
+      }
+
+      // Preview (pedidos / faturamento): dados tratados no Neon, envio manual
+      const importSummary = result.importSummary;
+      if (!importSummary) {
+        throw new Error("Solução codada não retornou resumo de importação");
+      }
+      const previewRows = result.previewRows ?? [];
+      const truncated = Boolean(result.truncated);
       await setProgress(spreadsheetId, {
-        status: "sent",
-        sentAt: new Date(),
-        totalRows: summary.insertedRowCount,
-        processedRows: summary.insertedRowCount,
-        newRows: summary.insertedRowCount,
+        status: "pending",
+        totalRows: importSummary.validRows,
+        processedRows: importSummary.validRows,
+        newRows:
+          importSummary.mode === "faturamento"
+            ? importSummary.numerosNovos
+            : importSummary.rowsToInsert,
         updatedRows: 0,
-        processMessage: summary.note,
+        processMessage: importSummary.note,
         rawData: JSON.stringify({
           headers: result.headers,
-          rows: [],
+          rows: previewRows,
+          truncated,
           staging: false,
           codedSolution: true,
-          snapshot: summary,
-          note: summary.note,
+          codedSummary: importSummary,
+          note: truncated
+            ? `Preview: ${previewRows.length} de ${importSummary.validRows} linhas. ${importSummary.note}`
+            : importSummary.note,
         }),
       });
       console.log(
-        `[coded] ${coded.id} OK: ${summary.previousRowCount} → ${summary.finalRowCount} (${fileName})`,
+        `[coded] ${coded.id} preview: ${importSummary.validRows} linhas válidas (${fileName})`,
       );
       emit?.("new_spreadsheet", {
         companyId: company.id,

@@ -21,6 +21,8 @@ import {
 } from "../services/externalDbService.js";
 import { normalizeCell } from "../utils/hash.js";
 import { mapRowsWithColumnMapping } from "../utils/columnMapping.js";
+import { companyUsesCodedSolution } from "../solucoesAvinor/index.js";
+import { getDriveClientForImport } from "../services/googleDriveService.js";
 
 export type SendReport = {
   spreadsheetRows: number;
@@ -126,7 +128,7 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Snapshot de solução codada: só resumo (sem tabela de 15k linhas)
+    // Solução codada — snapshot (clientes): só resumo
     try {
       const rawSnap = JSON.parse(spreadsheet.rawData) as {
         codedSolution?: boolean;
@@ -139,8 +141,28 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
           note: string;
           codedSolutionId: string;
         };
+        codedSummary?: {
+          mode: string;
+          codedSolutionId: string;
+          targetTable: string;
+          note: string;
+          validRows: number;
+          linesRead?: number;
+          ignoredRows?: number;
+          rowsToInsert?: number;
+          pedidosInFile?: number;
+          pedidosChanged?: number;
+          pedidosUnchanged?: number;
+          numerosNovos?: number;
+          numerosExistentes?: number;
+          ignoredTotal?: number;
+          ignoredResumo?: number;
+          ignoredNoNumero?: number;
+        };
         note?: string;
         headers?: string[];
+        rows?: string[][];
+        truncated?: boolean;
       };
       if (rawSnap.codedSolution && rawSnap.snapshot) {
         const s = rawSnap.snapshot;
@@ -179,6 +201,75 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
             total: s.insertedRowCount,
             hasMore: false,
             nextOffset: null,
+          },
+        });
+        return;
+      }
+
+      // Solução codada — preview (pedidos / faturamento): tabela tratada + contadores
+      if (rawSnap.codedSolution && rawSnap.codedSummary) {
+        const s = rawSnap.codedSummary;
+        const storedRows = Array.isArray(rawSnap.rows) ? rawSnap.rows : [];
+        const pageRows = storedRows.slice(offset, offset + limit);
+        const totalRows = spreadsheet.totalRows || s.validRows;
+        const hasMore = offset + pageRows.length < storedRows.length;
+
+        const mustSend =
+          s.mode === "faturamento"
+            ? (s.numerosNovos ?? 0)
+            : (s.rowsToInsert ?? 0);
+        const alreadyInDb =
+          s.mode === "faturamento"
+            ? (s.numerosExistentes ?? 0)
+            : (s.pedidosUnchanged ?? 0);
+
+        const diffRows = pageRows.map((data) => ({
+          isNew: true,
+          isNewInDb: false,
+          mustSend: true,
+          isUpdated: false,
+          mustUpdate: false,
+          changes: [] as { column: string; from: string; to: string }[],
+          data,
+        }));
+
+        res.json({
+          success: true,
+          headers: rawSnap.headers ?? [],
+          rows: diffRows,
+          summary: {
+            totalRows: pageRows.length,
+            newRows: mustSend,
+            previousRows: 0,
+            alreadyInDb,
+            mustSend,
+            mustUpdate: 0,
+            jobTotalRows: totalRows,
+          },
+          dbWindowDays: 0,
+          dateColumnUsed: null,
+          compareColumnUsed: null,
+          dbCompareLimit: null,
+          dbCompareMode: "skipped",
+          dbCheckSkipped: true,
+          skippedColumns: [],
+          dbRowsLoaded: alreadyInDb,
+          syncMode: s.mode,
+          truncated: Boolean(rawSnap.truncated),
+          note:
+            rawSnap.note ??
+            `Preview tratado — ${totalRows} linha(s) válidas. Envio grava no MySQL via solução codada.`,
+          staging: false,
+          codedSolution: true,
+          codedSummary: s,
+          processMessage: spreadsheet.processMessage,
+          pagination: {
+            offset,
+            limit,
+            loaded: pageRows.length,
+            total: totalRows,
+            hasMore,
+            nextOffset: hasMore ? offset + pageRows.length : null,
           },
         });
         return;
@@ -529,6 +620,77 @@ export async function sendSpreadsheet(req: Request, res: Response): Promise<void
     if (!ctx) {
       res.status(404).json({ success: false, error: "Planilha não encontrada" });
       return;
+    }
+
+    // Solução codada com preview (pedidos / faturamento): reprocessa arquivo e grava
+    const coded = companyUsesCodedSolution(ctx.spreadsheet.company);
+    if (coded?.runCommit && !coded.autoCommitOnImport) {
+      let rawCoded: { codedSolution?: boolean; codedSummary?: unknown } = {};
+      try {
+        rawCoded = JSON.parse(ctx.spreadsheet.rawData) as typeof rawCoded;
+      } catch {
+        /* ignore */
+      }
+      if (rawCoded.codedSolution) {
+        const dbSettings = await getAppDbSettings();
+        if (!dbSettings) {
+          res.status(500).json({ success: false, error: "Banco de destino não configurado" });
+          return;
+        }
+        const drive = await getDriveClientForImport();
+        if (!drive) {
+          res.status(500).json({ success: false, error: "Google Drive não conectado" });
+          return;
+        }
+        const commit = await coded.runCommit({
+          spreadsheetId: id,
+          company: ctx.spreadsheet.company,
+          drive,
+          file: {
+            id: ctx.spreadsheet.googleFileId,
+            name: ctx.spreadsheet.fileName,
+          },
+          dbSettings,
+        });
+        const s = commit.summary;
+        await prisma.spreadsheet.update({
+          where: { id },
+          data: {
+            status: "sent",
+            sentAt: new Date(),
+            sentBy: req.user?.email,
+            processMessage: s.note,
+            rawData: JSON.stringify({
+              ...rawCoded,
+              codedSummary: s,
+              note: s.note,
+            }),
+          },
+        });
+        const dbTableRowCount = await countTableRows(
+          dbSettings,
+          ctx.spreadsheet.company.targetTable ?? s.targetTable,
+        );
+        res.json({
+          success: true,
+          insertedCount: s.insertedRowCount,
+          updatedCount: 0,
+          completed: true,
+          report: {
+            spreadsheetRows: s.validRows,
+            insertedCount: s.insertedRowCount,
+            updatedCount: 0,
+            mustSendRemaining: 0,
+            mustUpdateRemaining: 0,
+            alreadyInDb:
+              s.mode === "faturamento" ? s.numerosExistentes : s.pedidosUnchanged,
+            skippedColumns: [],
+            dbTableRowCount,
+            completed: true,
+          },
+        });
+        return;
+      }
     }
 
     let truncated = false;

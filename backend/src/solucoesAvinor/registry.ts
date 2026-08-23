@@ -1,10 +1,14 @@
 // backend/src/solucoesAvinor/registry.ts
 
 import { AVINOR_CLIENTES } from "./avinorClientes.js";
+import { AVINOR_PEDIDOS } from "./avinorPedidos.js";
+import { AVINOR_FATURAMENTO } from "./avinorFaturamento.js";
 import type { CodedSolution } from "./types.js";
 
 const REGISTRY: Record<string, CodedSolution> = {
   [AVINOR_CLIENTES.id]: AVINOR_CLIENTES,
+  [AVINOR_PEDIDOS.id]: AVINOR_PEDIDOS,
+  [AVINOR_FATURAMENTO.id]: AVINOR_FATURAMENTO,
 };
 
 export function listCodedSolutions(): Array<{

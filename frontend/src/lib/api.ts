@@ -154,6 +154,25 @@ export type DiffResult = {
     note: string;
     codedSolutionId: string;
   };
+  codedSummary?: {
+    mode: "pedidos" | "faturamento";
+    codedSolutionId: string;
+    targetTable: string;
+    note: string;
+    validRows: number;
+    linesRead: number;
+    ignoredRows: number;
+    rowsToInsert?: number;
+    pedidosInFile?: number;
+    pedidosChanged?: number;
+    pedidosUnchanged?: number;
+    ignoredTotal?: number;
+    numerosNovos?: number;
+    numerosExistentes?: number;
+    ignoredResumo?: number;
+    ignoredNoNumero?: number;
+    insertedRowCount?: number;
+  };
   processMessage?: string | null;
   pagination?: {
     offset: number;

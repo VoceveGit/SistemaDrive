@@ -14,6 +14,8 @@ export type SheetParseOptions = {
   dataRow?: number | null;
   sheetName?: string | null;
   autofillEmpty?: boolean;
+  /** Com autofillEmpty: preenche vazio só nas primeiras N colunas (undefined = todas). */
+  autofillColumns?: number;
   skipEmptyRows?: boolean;
   ignoreRules?: IgnoreRules | null;
 };

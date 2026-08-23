@@ -89,6 +89,8 @@ export type StreamSheetCallbacks = {
   onHeaders?: (headers: string[]) => Promise<void> | void;
   onBatch: StreamRowBatchHandler;
   onProgress?: (processed: number) => Promise<void> | void;
+  /** Retorna true para interromper a leitura (ex.: rodapé de faturamento). */
+  shouldStop?: (rowVals: string[], rowNumber: number) => boolean;
 };
 
 export type StreamSheetResult = {
@@ -108,7 +110,7 @@ export async function streamXlsxInBatches(
   batchSize: number,
   callbacks: StreamSheetCallbacks,
 ): Promise<StreamSheetResult> {
-  const { onBatch, onHeaders, onProgress } = callbacks;
+  const { onBatch, onHeaders, onProgress, shouldStop } = callbacks;
   const headerRowNum = Math.max(options.headerRow ?? 1, 1);
   const dataStartNum =
     options.dataRow != null && options.dataRow > 0
@@ -118,6 +120,7 @@ export async function streamXlsxInBatches(
   const targetSheet = options.sheetName?.trim() || null;
   const skipEmpty = options.skipEmptyRows !== false;
   const autofill = Boolean(options.autofillEmpty);
+  const autofillLimit = options.autofillColumns;
   const ignore = options.ignoreRules;
 
   let headers: string[] = [];
@@ -207,7 +210,9 @@ export async function streamXlsxInBatches(
       let rowVals = keepIdx.map((i) => cells[i] ?? "");
 
       if (autofill) {
+        const limit = autofillLimit ?? rowVals.length;
         rowVals = rowVals.map((v, i) => {
+          if (i >= limit) return v;
           if (v !== "") {
             lastFilled[i] = v;
             return v;
@@ -222,6 +227,8 @@ export async function streamXlsxInBatches(
         const cell = normalizeIgnoreToken(rowVals[ignoreColIdx] ?? "");
         if (banned.has(cell)) continue;
       }
+
+      if (shouldStop?.(rowVals, rowNumber)) break;
 
       batch.push(rowVals);
       totalRows += 1;
@@ -264,7 +271,7 @@ export async function streamCsvInBatches(
   batchSize: number,
   callbacks: StreamSheetCallbacks,
 ): Promise<StreamSheetResult> {
-  const { onBatch, onHeaders, onProgress } = callbacks;
+  const { onBatch, onHeaders, onProgress, shouldStop } = callbacks;
   const { createReadStream } = await import("fs");
   const readline = await import("readline");
 
@@ -276,6 +283,7 @@ export async function streamCsvInBatches(
 
   const skipEmpty = options.skipEmptyRows !== false;
   const autofill = Boolean(options.autofillEmpty);
+  const autofillLimit = options.autofillColumns;
   const ignore = options.ignoreRules;
 
   let headers: string[] = [];
@@ -334,7 +342,9 @@ export async function streamCsvInBatches(
 
     let rowVals = keepIdx.map((i) => String(cells[i] ?? "").trim());
     if (autofill) {
+      const limit = autofillLimit ?? rowVals.length;
       rowVals = rowVals.map((v, i) => {
+        if (i >= limit) return v;
         if (v !== "") {
           lastFilled[i] = v;
           return v;
@@ -347,6 +357,8 @@ export async function streamCsvInBatches(
       const cell = normalizeIgnoreToken(rowVals[ignoreColIdx] ?? "");
       if (banned.has(cell)) continue;
     }
+
+    if (shouldStop?.(rowVals, lineNo)) break;
 
     batch.push(rowVals);
     totalRows += 1;

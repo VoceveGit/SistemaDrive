@@ -15,9 +15,53 @@ export type SnapshotSummary = {
   note: string;
 };
 
+export type PedidosSummary = {
+  mode: "pedidos";
+  codedSolutionId: string;
+  targetTable: string;
+  fileName: string;
+  linesRead: number;
+  validRows: number;
+  ignoredRows: number;
+  ignoredTotal: number;
+  pedidosInFile: number;
+  pedidosChanged: number;
+  pedidosUnchanged: number;
+  rowsToInsert: number;
+  insertedRowCount: number;
+  note: string;
+};
+
+export type FaturamentoSummary = {
+  mode: "faturamento";
+  codedSolutionId: string;
+  targetTable: string;
+  fileName: string;
+  linesRead: number;
+  validRows: number;
+  ignoredRows: number;
+  ignoredResumo: number;
+  ignoredNoNumero: number;
+  numerosNovos: number;
+  numerosExistentes: number;
+  insertedRowCount: number;
+  note: string;
+};
+
+export type CodedImportSummary = PedidosSummary | FaturamentoSummary;
+
 export type CodedSolutionRunResult = {
-  summary: SnapshotSummary;
   headers: string[];
+  /** Snapshot (clientes) */
+  summary?: SnapshotSummary;
+  /** Preview pedidos/faturamento */
+  previewRows?: string[][];
+  importSummary?: CodedImportSummary;
+  truncated?: boolean;
+};
+
+export type CodedSolutionCommitResult = {
+  summary: CodedImportSummary;
 };
 
 export type CodedSolutionContext = {
@@ -36,5 +80,8 @@ export type CodedSolution = {
   defaultTargetTable: string;
   headerRow: number;
   dataRow: number;
-  runSnapshot: (ctx: CodedSolutionContext) => Promise<CodedSolutionRunResult>;
+  /** true = grava no import (clientes). false = preview + envio manual. */
+  autoCommitOnImport: boolean;
+  runImport: (ctx: CodedSolutionContext) => Promise<CodedSolutionRunResult>;
+  runCommit?: (ctx: CodedSolutionContext) => Promise<CodedSolutionCommitResult>;
 };

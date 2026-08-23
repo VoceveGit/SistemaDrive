@@ -90,11 +90,24 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
           setJobTotal(total);
         }
 
-        // Snapshot de solução codada: só resumo, não pagina linhas
+        // Snapshot de solução codada (clientes): só resumo
         if (page.codedSolution && page.snapshot) {
           setRows([]);
           setJobTotal(page.snapshot.insertedRowCount);
           break;
+        }
+
+        // Preview codado (pedidos/faturamento): pagina linhas tratadas
+        if (page.codedSolution && page.codedSummary) {
+          accumulated = [...accumulated, ...page.rows];
+          setRows(accumulated);
+          setJobTotal(page.pagination?.total ?? page.summary.jobTotalRows ?? accumulated.length);
+          const hasMore = Boolean(page.pagination?.hasMore);
+          const next = page.pagination?.nextOffset;
+          if (!hasMore || next == null || page.rows.length === 0) break;
+          offset = next;
+          await new Promise((r) => setTimeout(r, 120));
+          continue;
         }
 
         accumulated = [...accumulated, ...page.rows];
@@ -263,8 +276,14 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
 
   const diff = meta;
   const snapshot = diff.snapshot;
+  const codedSummary = diff.codedSummary;
   let mustSendCounter = -1;
-  const canSend = summary.mustSend > 0 || (summary.mustUpdate ?? 0) > 0;
+  const canSend =
+    (codedSummary
+      ? (codedSummary.mode === "faturamento"
+          ? (codedSummary.numerosNovos ?? 0)
+          : (codedSummary.rowsToInsert ?? 0)) > 0
+      : summary.mustSend > 0 || (summary.mustUpdate ?? 0) > 0) && status !== "sent";
   const sending =
     sendAllMutation.isPending || sendOneMutation.isPending || sendSelectedMutation.isPending;
   const progressPct =
@@ -327,8 +346,86 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
     );
   }
 
+  const codedSummaryPanel =
+    codedSummary && diff.codedSolution ? (
+      <div className="mb-4 rounded-xl border border-accent-blue/30 bg-accent-blue/10 p-4 text-sm">
+        <h3 className="font-semibold text-text-primary">
+          Preview tratado — {codedSummary.codedSolutionId}
+        </h3>
+        <p className="mt-1 text-text-secondary">{codedSummary.note}</p>
+        <ul className="mt-3 grid gap-1 text-xs text-text-secondary sm:grid-cols-2">
+          <li>
+            Linhas lidas:{" "}
+            <strong className="text-text-primary">{formatNumber(codedSummary.linesRead)}</strong>
+          </li>
+          <li>
+            Válidas (preview):{" "}
+            <strong className="text-text-primary">{formatNumber(codedSummary.validRows)}</strong>
+          </li>
+          <li>
+            Ignoradas:{" "}
+            <strong className="text-accent-amber">
+              {formatNumber(codedSummary.ignoredRows)}
+            </strong>
+          </li>
+          {codedSummary.mode === "pedidos" && (
+            <>
+              <li>
+                Pedidos no arquivo:{" "}
+                <strong>{formatNumber(codedSummary.pedidosInFile ?? 0)}</strong>
+              </li>
+              <li>
+                Pedidos com diferença:{" "}
+                <strong className="text-accent-green">
+                  {formatNumber(codedSummary.pedidosChanged ?? 0)}
+                </strong>
+              </li>
+              <li>
+                Pedidos iguais (skip):{" "}
+                <strong>{formatNumber(codedSummary.pedidosUnchanged ?? 0)}</strong>
+              </li>
+              <li>
+                Linhas a inserir:{" "}
+                <strong className="text-accent-green">
+                  {formatNumber(codedSummary.rowsToInsert ?? 0)}
+                </strong>
+              </li>
+            </>
+          )}
+          {codedSummary.mode === "faturamento" && (
+            <>
+              <li>
+                Números novos:{" "}
+                <strong className="text-accent-green">
+                  {formatNumber(codedSummary.numerosNovos ?? 0)}
+                </strong>
+              </li>
+              <li>
+                Já no banco:{" "}
+                <strong>{formatNumber(codedSummary.numerosExistentes ?? 0)}</strong>
+              </li>
+              <li>
+                Ignoradas (resumo):{" "}
+                <strong>{formatNumber(codedSummary.ignoredResumo ?? 0)}</strong>
+              </li>
+              <li>
+                Ignoradas (sem numero):{" "}
+                <strong>{formatNumber(codedSummary.ignoredNoNumero ?? 0)}</strong>
+              </li>
+            </>
+          )}
+        </ul>
+        {diff.truncated && (
+          <p className="mt-2 text-xs text-text-muted">
+            Tabela abaixo: amostra das primeiras linhas tratadas (como vão pro MySQL).
+          </p>
+        )}
+      </div>
+    ) : null;
+
   return (
     <div className="min-w-0 max-w-full border-t border-border bg-bg-surface p-4">
+      {codedSummaryPanel}
       {(loadingMore || (loading && rows.length > 0)) && (
         <div className="mb-4 rounded-lg border border-accent-blue/30 bg-accent-blue/10 px-4 py-3 text-sm text-text-primary">
           <div className="flex items-center gap-2">

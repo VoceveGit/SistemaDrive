@@ -121,7 +121,7 @@ function padRow(row: string[], len: number): string[] {
   return out;
 }
 
-async function runSnapshot(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
+async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
   const targetTable =
     ctx.company.targetTable?.trim() || AVINOR_CLIENTES.defaultTargetTable;
 
@@ -234,5 +234,6 @@ export const AVINOR_CLIENTES: CodedSolution = {
   defaultTargetTable: "base_clientes_avinor",
   headerRow: 4,
   dataRow: 5,
-  runSnapshot,
+  autoCommitOnImport: true,
+  runImport,
 };
