@@ -182,13 +182,23 @@ function resolveSheetIndex(
     if (k && sheetByKey.has(k)) return sheetByKey.get(k)!;
   }
 
-  // Match frouxo: chave do banco contida no header ou vice-versa (mín. 5 chars)
+  // Match frouxo: só se a chave for bem parecida (evita Dt.Entrega → coluna vazia errada)
   if (primary.length >= 5) {
+    let bestIdx = -1;
+    let bestScore = 0;
     for (const [sheetKey, idx] of sheetByKey) {
+      if (sheetKey === primary) return idx;
       if (sheetKey.includes(primary) || primary.includes(sheetKey)) {
-        if (Math.min(sheetKey.length, primary.length) >= 5) return idx;
+        const score = Math.min(sheetKey.length, primary.length);
+        // Exige que a menor chave cubra ≥70% da maior (não casa "data" com "dtentrega")
+        const longer = Math.max(sheetKey.length, primary.length);
+        if (score >= 5 && score / longer >= 0.7 && score > bestScore) {
+          bestScore = score;
+          bestIdx = idx;
+        }
       }
     }
+    if (bestIdx >= 0) return bestIdx;
   }
 
   return -1;

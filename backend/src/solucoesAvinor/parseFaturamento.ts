@@ -19,8 +19,17 @@ import {
 export type FaturamentoParseResult = {
   headers: string[];
   validRows: string[][];
+  /** Linhas de dados lidas após o cabeçalho (até parar no rodapé). */
   linesRead: number;
+  /** Linhas 1..(dataRow-1) — topo do relatório (filtros / RESUMO CFOP). */
+  headerRowsSkipped: number;
+  /** Sem número válido / rótulos de resumo no meio. */
+  skippedNoNumero: number;
+  /** Linhas do rodapé (a partir do 1º marcador até o fim do arquivo lido). */
+  skippedFooter: number;
+  /** @deprecated use skippedNoNumero */
   ignoredResumo: number;
+  /** @deprecated use skippedNoNumero */
   ignoredNoNumero: number;
   stoppedAtFooter: boolean;
   numeroColIdx: number;
@@ -37,8 +46,8 @@ export async function parseFaturamentoSpreadsheet(params: {
 }): Promise<FaturamentoParseResult> {
   const { drive, file, dbColumns, headerRow, dataRow, onProgress } = params;
   let tmpPath: string | null = null;
-  let ignoredResumo = 0;
-  let ignoredNoNumero = 0;
+  let skippedNoNumero = 0;
+  let skippedFooter = 0;
   let stoppedAtFooter = false;
 
   try {
@@ -65,22 +74,24 @@ export async function parseFaturamentoSpreadsheet(params: {
       throw new Error('Coluna "numero" não encontrada no cabeçalho (linha 18).');
     }
 
+    const headerRowsSkipped = Math.max(0, dataRow - 1);
     const rawValid: string[][] = [];
     let linesRead = 0;
 
-    for (const raw of loaded.rows) {
+    for (let i = 0; i < loaded.rows.length; i++) {
+      const raw = loaded.rows[i]!;
       linesRead += 1;
       const row = padRow(raw, sheetHeaders.length);
 
       if (isFaturamentoFooterStopRow(row)) {
         stoppedAtFooter = true;
+        // Esta linha + o que sobrou no arquivo = rodapé saltado
+        skippedFooter = loaded.rows.length - i;
         break;
       }
 
       if (isFaturamentoSkipRow(row, numeroIdxSheet)) {
-        const numero = String(row[numeroIdxSheet] ?? "").trim();
-        if (!isValidFaturamentoNumero(numero)) ignoredNoNumero += 1;
-        else ignoredResumo += 1;
+        skippedNoNumero += 1;
         continue;
       }
 
@@ -111,8 +122,11 @@ export async function parseFaturamentoSpreadsheet(params: {
       headers: mapped.headers,
       validRows: mapped.rows,
       linesRead,
-      ignoredResumo,
-      ignoredNoNumero,
+      headerRowsSkipped,
+      skippedNoNumero,
+      skippedFooter,
+      ignoredResumo: 0,
+      ignoredNoNumero: skippedNoNumero,
       stoppedAtFooter,
       numeroColIdx,
       missingColumns: mapped.missingColumns,
@@ -123,10 +137,10 @@ export async function parseFaturamentoSpreadsheet(params: {
 }
 
 export function extractNumeros(rows: string[][], numeroColIdx: number): string[] {
-  const set = new Set<string>();
+  const out: string[] = [];
   for (const row of rows) {
     const n = String(row[numeroColIdx] ?? "").trim();
-    if (n) set.add(n);
+    if (isValidFaturamentoNumero(n)) out.push(n);
   }
-  return [...set];
+  return out;
 }

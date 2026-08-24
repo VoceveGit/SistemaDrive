@@ -177,6 +177,9 @@ export type DiffResult = {
     dateMin?: string;
     dateMax?: string;
     sampleDates?: string[];
+    headerRowsSkipped?: number;
+    skippedNoNumero?: number;
+    skippedFooter?: number;
   };
   codedError?: string;
   processMessage?: string | null;

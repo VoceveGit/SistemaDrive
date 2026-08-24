@@ -136,16 +136,58 @@ export async function parsePedidosSpreadsheet(params: {
       throw new Error("Nenhuma linha válida após filtros (TOTAL / Descrição vazia).");
     }
 
+    // Datas na coluna da planilha (antes do map) — se aqui já estiver vazio, é leitura
+    const sheetDateSamples: string[] = [];
+    let sheetDatesOk = 0;
+    for (const row of withPedido) {
+      const rawDt = String(row[dtIdxSheet] ?? "").trim();
+      if (!rawDt) continue;
+      if (sheetDateSamples.length < 5) sheetDateSamples.push(rawDt);
+      const dt = parseDateTimeCell(rawDt);
+      if (dt) sheetDatesOk += 1;
+    }
+    if (sheetDatesOk === 0) {
+      throw new Error(
+        `Nenhuma Dt.Entrega válida na planilha (amostra col. planilha: ${
+          sheetDateSamples.length
+            ? sheetDateSamples.map((s) => `"${s}"`).join(" | ")
+            : '"" | "" | ""'
+        }). Esperado DD/MM/YYYY — confira a leitura das datas.`,
+      );
+    }
+
     const mapped = mapRowsToDbColumnOrder({
       sheetHeaders,
       sheetRows: withPedido,
       dbColumns,
     });
 
+    if (mapped.missingColumns.length > 0) {
+      const critical = mapped.missingColumns.filter((c) => {
+        const k = c.toLowerCase().replace(/[^a-z0-9]/g, "");
+        return k.includes("dtentrega") || k === "pedido" || k.includes("descricao");
+      });
+      if (critical.length > 0) {
+        throw new Error(
+          `Colunas críticas sem par na planilha: ${critical.join(", ")}. ` +
+            `Não dá pra seguir com valores vazios.`,
+        );
+      }
+    }
+
     const dtColIdx = findColumnIndex(mapped.headers, "Dt.Entrega", "Dt Entrega");
     const pedidoColIdx = findColumnIndex(mapped.headers, "Pedido");
     if (dtColIdx < 0 || pedidoColIdx < 0) {
       throw new Error("Após mapear, Dt.Entrega ou Pedido não encontrados nas cols do MySQL.");
+    }
+
+    // Se o map esvaziou a coluna de data, copia da planilha (mesma ordem de linhas)
+    for (let i = 0; i < mapped.rows.length; i++) {
+      const cur = String(mapped.rows[i]![dtColIdx] ?? "").trim();
+      if (!cur) {
+        const fromSheet = String(withPedido[i]![dtIdxSheet] ?? "").trim();
+        if (fromSheet) mapped.rows[i]![dtColIdx] = fromSheet;
+      }
     }
 
     const dates: Date[] = [];
@@ -164,13 +206,10 @@ export async function parsePedidosSpreadsheet(params: {
     }
 
     if (dates.length === 0) {
-      const sample = mapped.rows
-        .slice(0, 5)
-        .map((r) => `"${String(r[dtColIdx] ?? "")}"`)
-        .join(" | ");
       throw new Error(
-        `Nenhuma Dt.Entrega válida na planilha (amostra: ${sample}). ` +
-          `Esperado DD/MM/YYYY — confira a leitura das datas.`,
+        `Nenhuma Dt.Entrega válida após mapear (amostra planilha: ${sheetDateSamples
+          .map((s) => `"${s}"`)
+          .join(" | ")}).`,
       );
     }
 

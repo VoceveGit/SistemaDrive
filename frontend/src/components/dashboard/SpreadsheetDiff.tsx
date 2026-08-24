@@ -365,12 +365,14 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
                 {formatNumber(codedSummary.validRows)}
               </strong>
             </li>
-            <li>
-              Ignoradas (TOTAL/resumo):{" "}
-              <strong className="text-accent-amber">
-                {formatNumber(codedSummary.ignoredRows)}
-              </strong>
-            </li>
+            {codedSummary.mode === "pedidos" && (
+              <li>
+                Ignoradas (TOTAL / Descrição vazia):{" "}
+                <strong className="text-accent-amber">
+                  {formatNumber(codedSummary.ignoredRows)}
+                </strong>
+              </li>
+            )}
             {codedSummary.mode === "pedidos" && (
               <>
                 <li>
@@ -421,9 +423,34 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
                   Já no banco:{" "}
                   <strong>{formatNumber(codedSummary.numerosExistentes ?? 0)}</strong>
                 </li>
+                <li>
+                  Saltadas (topo):{" "}
+                  <strong className="text-accent-amber">
+                    {formatNumber(codedSummary.headerRowsSkipped ?? 0)}
+                  </strong>
+                </li>
+                <li>
+                  Saltadas (sem número):{" "}
+                  <strong className="text-accent-amber">
+                    {formatNumber(codedSummary.skippedNoNumero ?? codedSummary.ignoredNoNumero ?? 0)}
+                  </strong>
+                </li>
+                <li>
+                  Saltadas (rodapé):{" "}
+                  <strong className="text-accent-amber">
+                    {formatNumber(codedSummary.skippedFooter ?? 0)}
+                  </strong>
+                </li>
+                <li>
+                  Total saltadas:{" "}
+                  <strong className="text-accent-amber">
+                    {formatNumber(codedSummary.ignoredRows)}
+                  </strong>
+                </li>
                 <li className="sm:col-span-2 text-xs text-text-muted">
-                  Insert só se o <code className="font-mono">numero</code> ainda não existe no
-                  MySQL.
+                  Filtro: só linhas com <code className="font-mono">numero</code> válido. Topo
+                  (antes da linha de dados) e rodapé (RESUMO GERAL…) não entram. Insert só se o
+                  número ainda não existe no MySQL.
                 </li>
               </>
             )}

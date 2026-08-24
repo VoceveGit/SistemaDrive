@@ -46,7 +46,11 @@ export type FaturamentoSummary = {
   fileName: string;
   linesRead: number;
   validRows: number;
+  /** Total saltado = topo + sem número + rodapé */
   ignoredRows: number;
+  headerRowsSkipped?: number;
+  skippedNoNumero?: number;
+  skippedFooter?: number;
   ignoredResumo: number;
   ignoredNoNumero: number;
   numerosNovos: number;

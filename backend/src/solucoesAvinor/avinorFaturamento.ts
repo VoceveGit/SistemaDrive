@@ -101,7 +101,8 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
     });
   }
 
-  const ignoredRows = parsed.ignoredResumo + parsed.ignoredNoNumero;
+  const skippedTotal =
+    parsed.headerRowsSkipped + parsed.skippedNoNumero + parsed.skippedFooter;
   const missingNote =
     parsed.missingColumns.length > 0
       ? ` Colunas MySQL sem par na planilha (vão vazias): ${parsed.missingColumns.join(", ")}.`
@@ -114,15 +115,20 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
     fileName: ctx.file.name ?? "planilha",
     linesRead: parsed.linesRead,
     validRows: parsed.validRows.length,
-    ignoredRows,
-    ignoredResumo: parsed.ignoredResumo,
-    ignoredNoNumero: parsed.ignoredNoNumero,
+    ignoredRows: skippedTotal,
+    headerRowsSkipped: parsed.headerRowsSkipped,
+    skippedNoNumero: parsed.skippedNoNumero,
+    skippedFooter: parsed.skippedFooter,
+    ignoredResumo: parsed.skippedFooter,
+    ignoredNoNumero: parsed.skippedNoNumero,
     numerosNovos,
     numerosExistentes,
     insertedRowCount: numerosNovos,
     note:
       `Pronto p/ enviar: ${rowsToInsert.length} nota(s) no staging ` +
-      `(${numerosExistentes} já no banco). ${ignoredRows} ignorada(s).` +
+      `(${numerosExistentes} já no banco). ` +
+      `Saltadas: ${skippedTotal} ` +
+      `(topo ${parsed.headerRowsSkipped}, sem nº ${parsed.skippedNoNumero}, rodapé ${parsed.skippedFooter}).` +
       missingNote,
   };
 
