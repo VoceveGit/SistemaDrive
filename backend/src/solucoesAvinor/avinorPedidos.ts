@@ -1,5 +1,6 @@
 // backend/src/solucoesAvinor/avinorPedidos.ts
 // Sync igual upload_avinor: apaga janela de meses (Dt.Entrega) + insert total.
+// Neon: só resumo + datas (sem linhas).
 
 import type {
   CodedSolution,
@@ -12,7 +13,6 @@ import { listMysqlColumnsOrdered } from "./snapshotMysql.js";
 import { deleteByDateWindow, insertBatchDirect } from "./mysqlDirect.js";
 import { parsePedidosSpreadsheet } from "./parsePedidos.js";
 
-const MAX_PREVIEW_ROWS = 10;
 const BATCH = 400;
 
 async function loadColumns(ctx: CodedSolutionContext) {
@@ -33,8 +33,6 @@ async function analyzePedidos(
   forCommit: boolean,
 ): Promise<{
   headers: string[];
-  validRows: string[][];
-  previewRows: string[][];
   summary: PedidosSummary;
 }> {
   const { targetTable, columns } = await loadColumns(ctx);
@@ -77,8 +75,6 @@ async function analyzePedidos(
     }
   }
 
-  const previewRows = parsed.validRows.slice(0, MAX_PREVIEW_ROWS);
-
   const summary: PedidosSummary = {
     mode: "pedidos",
     codedSolutionId: AVINOR_PEDIDOS.id,
@@ -89,33 +85,30 @@ async function analyzePedidos(
     ignoredRows: parsed.ignoredTotal,
     ignoredTotal: parsed.ignoredTotal,
     pedidosInFile: parsed.pedidosInFile,
-    // Janela inteira: tudo será reescrito (sem comparação pedido a pedido)
     pedidosChanged: parsed.pedidosInFile,
     pedidosUnchanged: 0,
     rowsToInsert,
     insertedRowCount: forCommit ? insertedRowCount : rowsToInsert,
     monthFrom: parsed.monthFrom,
     monthToExclusive: parsed.monthToExclusive,
+    dateMin: parsed.dateMin,
+    dateMax: parsed.dateMax,
+    sampleDates: parsed.sampleDates,
     note: forCommit
-      ? `Pedidos OK: janela ${parsed.monthFrom} → ${parsed.monthToExclusive} (apagou ${deletedRows}, inseriu ${insertedRowCount}). ${parsed.pedidosInFile} pedido(s), ${parsed.ignoredTotal} linha(s) ignorada(s).`
-      : `Preview (amostra ${MAX_PREVIEW_ROWS}): ${parsed.validRows.length} linha(s) válidas, ${parsed.pedidosInFile} pedido(s). Janela ${parsed.monthFrom} ≤ Dt.Entrega < ${parsed.monthToExclusive}. Enviar apaga a janela e reinsere tudo. ${parsed.ignoredTotal} ignorada(s) (TOTAL/vazio).`,
+      ? `Pedidos OK: janela ${parsed.monthFrom} → ${parsed.monthToExclusive} (apagou ${deletedRows}, inseriu ${insertedRowCount}). Datas ${parsed.dateMin} … ${parsed.dateMax}. ${parsed.ignoredTotal} ignorada(s) (TOTAL).`
+      : `Pronto p/ enviar: ${parsed.validRows.length} linhas, ${parsed.pedidosInFile} pedidos. Dt.Entrega ${parsed.dateMin} … ${parsed.dateMax}. Janela ${parsed.monthFrom} ≤ x < ${parsed.monthToExclusive}. ${parsed.ignoredTotal} ignorada(s) (TOTAL).`,
   };
 
-  return {
-    headers: parsed.headers,
-    validRows: parsed.validRows,
-    previewRows,
-    summary,
-  };
+  return { headers: parsed.headers, summary };
 }
 
 async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
   const result = await analyzePedidos(ctx, false);
   return {
     headers: result.headers,
-    previewRows: result.previewRows,
+    previewRows: [],
     importSummary: result.summary,
-    truncated: result.previewRows.length < result.validRows.length,
+    truncated: true,
   };
 }
 
@@ -128,7 +121,7 @@ export const AVINOR_PEDIDOS: CodedSolution = {
   id: "avinor_pedidos",
   label: "Pedidos Avinor",
   description:
-    "Linha 7 = títulos. Por nome (pandas). Fill-down em todas as cols após filtrar TOTAL. Apaga janela de meses (Dt.Entrega) e reinsere.",
+    "Direto planilha→MySQL. TOTAL ignorado. Fill-down. Apaga janela Dt.Entrega e reinsere. Neon só resumo.",
   defaultTargetTable: "base_pedidos_avinor",
   headerRow: 7,
   dataRow: 8,

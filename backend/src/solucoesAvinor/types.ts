@@ -32,6 +32,10 @@ export type PedidosSummary = {
   /** Janela DELETE: Dt.Entrega >= monthFrom AND Dt.Entrega < monthToExclusive */
   monthFrom?: string;
   monthToExclusive?: string;
+  /** Datas identificadas (pra validar sem tabela) */
+  dateMin?: string;
+  dateMax?: string;
+  sampleDates?: string[];
   note: string;
 };
 

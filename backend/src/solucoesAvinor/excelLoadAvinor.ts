@@ -1,7 +1,8 @@
 // backend/src/solucoesAvinor/excelLoadAvinor.ts
-// Leitura XLSX para soluções Avinor — datas como openpyxl/pandas (não serial torto).
+// Leitura XLSX via SheetJS (xlsx) — cellDates + raw:false ≈ pandas (texto DD/MM/YYYY).
 
-import ExcelJS from "exceljs";
+import { readFile } from "fs/promises";
+import * as XLSX from "xlsx";
 import { sanitizeExcelText } from "../services/sheetParseService.js";
 
 /** Serial Excel → Date via época Unix (fórmula 25569). */
@@ -17,94 +18,54 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-function formatBrFromUtc(d: Date): string {
-  return `${pad2(d.getUTCDate())}/${pad2(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`;
-}
-
-function formatBrLocal(d: Date): string {
-  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
-}
-
-function isDateNumFmt(numFmt: string | undefined): boolean {
-  if (!numFmt) return false;
-  const f = numFmt.toLowerCase();
-  if (f === "general" || f === "@") return false;
-  if (/^[#0,.e+\-\s%()]+$/i.test(f) && !/[dmy]/i.test(f)) return false;
-  return /[dmy]|yyyy|dddd|mmmm/i.test(f);
+function formatBr(d: Date): string {
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  if (y < 1980 || y > 2100) return "";
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${y}`;
 }
 
 function looksLikeBrDate(s: string): boolean {
   return /^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(s.trim());
 }
 
-/**
- * Converte célula ExcelJS → string (datas em DD/MM/YYYY).
- * Prioridade: texto formatado BR → Date válida → serial moderno + numFmt → número/texto.
- */
-export function avinorCellToString(cell: ExcelJS.Cell): string {
-  const text = sanitizeExcelText(String(cell.text ?? ""));
-  const value = cell.value;
-  const numFmt = cell.numFmt;
-  const dateFmt = cell.type === ExcelJS.ValueType.Date || isDateNumFmt(numFmt);
-
-  // O que o Excel mostra (igual openpyxl “visível”)
-  if (text && looksLikeBrDate(text)) return text;
-
-  if (value == null || value === "") return text || "";
-
-  if (value instanceof Date) {
-    const y = value.getFullYear();
-    if (y >= 1980 && y <= 2100) return formatBrLocal(value);
-    // Date lixo (1905): tenta serial se value numérico veio errado — usa text
-    return text && looksLikeBrDate(text) ? text : "";
-  }
-
+/** Converte célula SheetJS → string; datas em DD/MM/YYYY. */
+export function sheetJsCellToString(value: unknown): string {
+  if (value == null || value === "") return "";
+  if (value instanceof Date) return formatBr(value);
   if (typeof value === "number") {
-    // Serial Excel moderno (~1982+) só se for coluna de data
-    if (dateFmt && value >= 30000 && value < 80000) {
-      return formatBrFromUtc(excelSerialToDate(value));
+    // Serial Excel moderno (~1982+)
+    if (value >= 30000 && value < 80000) {
+      const d = excelSerialToDate(value);
+      const br = formatBr(
+        new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
+      );
+      if (br) return br;
     }
-    if (text && looksLikeBrDate(text)) return text;
     return String(value);
   }
-
   if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
-
-  if (typeof value === "object") {
-    const obj = value as {
-      result?: unknown;
-      richText?: Array<{ text?: string }>;
-      text?: string;
-      formula?: string;
-    };
-    if (Array.isArray(obj.richText)) {
-      return sanitizeExcelText(obj.richText.map((p) => p.text ?? "").join(""));
+  const s = sanitizeExcelText(String(value));
+  // SheetJS raw:false às vezes devolve "8/1/26" ou "01/08/2026"
+  if (looksLikeBrDate(s)) return s;
+  // ISO residual
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const y = Number(iso[1]);
+    if (y >= 1980 && y <= 2100) {
+      return `${iso[3]}/${iso[2]}/${iso[1]}`;
     }
-    if (obj.result != null) {
-      if (obj.result instanceof Date) {
-        const y = obj.result.getFullYear();
-        if (y >= 1980 && y <= 2100) return formatBrLocal(obj.result);
-      }
-      if (typeof obj.result === "number" && dateFmt && obj.result >= 30000) {
-        return formatBrFromUtc(excelSerialToDate(obj.result));
-      }
-      return sanitizeExcelText(String(obj.result));
-    }
-    if (obj.text) return sanitizeExcelText(obj.text);
   }
-
-  return text || sanitizeExcelText(String(value));
+  return s;
 }
 
 export type AvinorSheetLoad = {
   headers: string[];
-  /** Linhas de dados (após headerRow), 0-based interno */
   rows: string[][];
 };
 
 /**
- * Carrega aba com ExcelJS completo (não stream) — datas confiáveis como pandas.
- * Adequado pra ~10k linhas Avinor.
+ * Carrega planilha com SheetJS — mesmo espírito do pandas (datas tipadas).
  */
 export async function loadAvinorXlsx(params: {
   filePath: string;
@@ -117,51 +78,58 @@ export async function loadAvinorXlsx(params: {
   const { filePath, headerRow, dataRow, sheetName, onProgress } = params;
   const skipFooter = params.skipFooter ?? 0;
 
-  await onProgress?.("Lendo planilha (ExcelJS)...");
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
+  await onProgress?.("Lendo planilha...");
+  const buffer = await readFile(filePath);
+  const workbook = XLSX.read(buffer, {
+    type: "buffer",
+    cellDates: true,
+    cellNF: false,
+    cellText: false,
+  });
 
-  let worksheet = sheetName
-    ? workbook.getWorksheet(sheetName)
-    : workbook.worksheets[0];
-  if (!worksheet && workbook.worksheets.length) {
-    worksheet = workbook.worksheets[0];
-  }
-  if (!worksheet) {
-    throw new Error("Nenhuma aba encontrada no arquivo");
+  const name =
+    (sheetName && workbook.SheetNames.includes(sheetName)
+      ? sheetName
+      : workbook.SheetNames[0]) ?? workbook.SheetNames[0];
+  if (!name) throw new Error("Nenhuma aba encontrada no arquivo");
+
+  const sheet = workbook.Sheets[name];
+  // raw:true + cellDates → Date objects; formatamos nós (BR)
+  const json = XLSX.utils.sheet_to_json<(unknown)[]>(sheet, {
+    header: 1,
+    defval: "",
+    raw: true,
+    dateNF: "dd/mm/yyyy",
+  });
+
+  if (json.length === 0) {
+    throw new Error("Planilha vazia");
   }
 
-  const headerExcelRow = worksheet.getRow(headerRow);
-  const colCount = Math.max(headerExcelRow.cellCount, worksheet.columnCount || 0, 1);
-  const headers: string[] = [];
-  for (let c = 1; c <= colCount; c++) {
-    headers.push(avinorCellToString(headerExcelRow.getCell(c)));
-  }
+  const headerRowIndex = Math.max(headerRow - 1, 0);
+  const dataStartIndex = Math.max(dataRow - 1, headerRowIndex + 1);
 
-  // Trim trailing empty headers
-  while (headers.length > 0 && !headers[headers.length - 1]) {
-    headers.pop();
-  }
+  const headerCells = json[headerRowIndex] ?? [];
+  let headers = (headerCells as unknown[]).map((c) =>
+    sanitizeExcelText(sheetJsCellToString(c)),
+  );
+  while (headers.length > 0 && !headers[headers.length - 1]) headers.pop();
   if (headers.length === 0) {
     throw new Error(`Cabeçalho vazio na linha ${headerRow}`);
   }
 
-  const lastRow = worksheet.rowCount || dataRow;
-  const endRow = skipFooter > 0 ? Math.max(dataRow - 1, lastRow - skipFooter) : lastRow;
-  const rows: string[][] = [];
+  let dataSlice = json.slice(dataStartIndex);
+  if (skipFooter > 0 && dataSlice.length > skipFooter) {
+    dataSlice = dataSlice.slice(0, dataSlice.length - skipFooter);
+  }
 
-  for (let r = dataRow; r <= endRow; r++) {
-    const excelRow = worksheet.getRow(r);
-    const cells: string[] = [];
-    let empty = true;
-    for (let c = 1; c <= headers.length; c++) {
-      const v = avinorCellToString(excelRow.getCell(c));
-      if (v) empty = false;
-      cells.push(v);
-    }
-    if (empty) continue;
+  const rows: string[][] = [];
+  for (const row of dataSlice) {
+    const arr = row as unknown[];
+    const cells = headers.map((_, i) => sheetJsCellToString(arr?.[i]));
+    if (cells.every((c) => !c)) continue;
     rows.push(cells);
-    if (rows.length % 500 === 0) {
+    if (rows.length % 1000 === 0) {
       await onProgress?.(`Lidas ${rows.length} linhas...`, rows.length);
     }
   }

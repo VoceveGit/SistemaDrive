@@ -151,13 +151,11 @@ export async function runChunkedImport(params: {
         return;
       }
 
-      // Preview (pedidos / faturamento): dados tratados no Neon, envio manual
+      // Preview leve (pedidos / faturamento): só resumo no Neon — sem linhas
       const importSummary = result.importSummary;
       if (!importSummary) {
         throw new Error("Solução codada não retornou resumo de importação");
       }
-      const previewRows = result.previewRows ?? [];
-      const truncated = Boolean(result.truncated);
       await setProgress(spreadsheetId, {
         status: "pending",
         totalRows: importSummary.validRows,
@@ -169,19 +167,17 @@ export async function runChunkedImport(params: {
         updatedRows: 0,
         processMessage: importSummary.note,
         rawData: JSON.stringify({
-          headers: result.headers,
-          rows: previewRows,
-          truncated,
+          headers: [],
+          rows: [],
+          truncated: true,
           staging: false,
           codedSolution: true,
           codedSummary: importSummary,
-          note: truncated
-            ? `Preview: ${previewRows.length} de ${importSummary.validRows} linhas. ${importSummary.note}`
-            : importSummary.note,
+          note: importSummary.note,
         }),
       });
       console.log(
-        `[coded] ${coded.id} preview: ${importSummary.validRows} linhas válidas (${fileName})`,
+        `[coded] ${coded.id} preview leve: ${importSummary.validRows} linhas válidas (${fileName})`,
       );
       emit?.("new_spreadsheet", {
         companyId: company.id,

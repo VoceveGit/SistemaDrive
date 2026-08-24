@@ -1,4 +1,5 @@
 // backend/src/solucoesAvinor/avinorFaturamento.ts
+// Neon: só resumo (sem linhas). Envio relê planilha → MySQL.
 
 import type {
   CodedSolution,
@@ -12,7 +13,6 @@ import { fetchExistingNumeros, insertBatchDirect } from "./mysqlDirect.js";
 import { extractNumeros, parseFaturamentoSpreadsheet } from "./parseFaturamento.js";
 import { isValidFaturamentoNumero } from "./rowFilters.js";
 
-const MAX_PREVIEW_ROWS = 10;
 const BATCH = 400;
 
 async function loadColumns(ctx: CodedSolutionContext) {
@@ -31,13 +31,7 @@ async function loadColumns(ctx: CodedSolutionContext) {
 async function analyzeFaturamento(
   ctx: CodedSolutionContext,
   forCommit: boolean,
-): Promise<{
-  headers: string[];
-  validRows: string[][];
-  previewRows: string[][];
-  summary: FaturamentoSummary;
-  rowsToInsert: string[][];
-}> {
+): Promise<{ headers: string[]; summary: FaturamentoSummary }> {
   const { targetTable, columns } = await loadColumns(ctx);
 
   const parsed = await parseFaturamentoSpreadsheet({
@@ -91,7 +85,6 @@ async function analyzeFaturamento(
     }
   }
 
-  const previewRows = parsed.validRows.slice(0, MAX_PREVIEW_ROWS);
   const ignoredRows = parsed.ignoredResumo + parsed.ignoredNoNumero;
 
   const summary: FaturamentoSummary = {
@@ -108,26 +101,20 @@ async function analyzeFaturamento(
     numerosExistentes,
     insertedRowCount: forCommit ? insertedRowCount : numerosNovos,
     note: forCommit
-      ? `Faturamento OK: ${insertedRowCount} nota(s) inserida(s). ${numerosExistentes} já existiam. ${ignoredRows} linha(s) ignorada(s).`
-      : `Preview: ${parsed.validRows.length} linha(s) com numero válido. ${numerosNovos} número(s) novo(s), ${numerosExistentes} já no banco. ${ignoredRows} ignorada(s) (resumo/sem numero).`,
+      ? `Faturamento OK: ${insertedRowCount} nota(s) inserida(s). ${numerosExistentes} já existiam. ${ignoredRows} ignorada(s).`
+      : `Pronto p/ enviar: ${parsed.validRows.length} linhas válidas, ${numerosNovos} número(s) novo(s), ${numerosExistentes} já no banco. ${ignoredRows} ignorada(s) (resumo/sem numero).`,
   };
 
-  return {
-    headers: parsed.headers,
-    validRows: parsed.validRows,
-    previewRows,
-    summary,
-    rowsToInsert,
-  };
+  return { headers: parsed.headers, summary };
 }
 
 async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
   const result = await analyzeFaturamento(ctx, false);
   return {
     headers: result.headers,
-    previewRows: result.previewRows,
+    previewRows: [],
     importSummary: result.summary,
-    truncated: result.previewRows.length < result.validRows.length,
+    truncated: true,
   };
 }
 
@@ -140,7 +127,7 @@ export const AVINOR_FATURAMENTO: CodedSolution = {
   id: "avinor_faturamento",
   label: "Faturamento Avinor",
   description:
-    "Por nome. Linha 18 = títulos. Ignora rodapés por texto. Insert se numero não existe.",
+    "Direto planilha→MySQL. Por nome/aliases. Insert se numero não existe. Neon só resumo.",
   defaultTargetTable: "faturamento_avinor",
   headerRow: 18,
   dataRow: 19,

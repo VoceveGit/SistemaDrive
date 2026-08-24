@@ -174,6 +174,9 @@ export type DiffResult = {
     insertedRowCount?: number;
     monthFrom?: string;
     monthToExclusive?: string;
+    dateMin?: string;
+    dateMax?: string;
+    sampleDates?: string[];
   };
   processMessage?: string | null;
   pagination?: {

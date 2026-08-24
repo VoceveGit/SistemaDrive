@@ -27,6 +27,9 @@ export type PedidosParseResult = {
   monthFrom: string;
   monthToExclusive: string;
   pedidosInFile: number;
+  dateMin: string;
+  dateMax: string;
+  sampleDates: string[];
 };
 
 function isTotalDescricao(desc: string): boolean {
@@ -146,13 +149,18 @@ export async function parsePedidosSpreadsheet(params: {
     }
 
     const dates: Date[] = [];
+    const dateLabels: string[] = [];
     const pedidos = new Set<string>();
     for (const row of mapped.rows) {
       pedidos.add(String(row[pedidoColIdx] ?? "").trim());
-      const dt = parseDateTimeCell(row[dtColIdx] ?? "");
+      const rawDt = String(row[dtColIdx] ?? "").trim();
+      const dt = parseDateTimeCell(rawDt);
       if (!dt) continue;
       const d = new Date(dt.replace(" ", "T"));
-      if (!Number.isNaN(d.getTime()) && d.getFullYear() >= 1980) dates.push(d);
+      if (!Number.isNaN(d.getTime()) && d.getFullYear() >= 1980) {
+        dates.push(d);
+        if (dateLabels.length < 5 && rawDt) dateLabels.push(rawDt);
+      }
     }
 
     if (dates.length === 0) {
@@ -167,6 +175,16 @@ export async function parsePedidosSpreadsheet(params: {
     }
 
     const { from, toExclusive } = pedidosMonthWindowFromDates(dates);
+    let minD = dates[0]!;
+    let maxD = dates[0]!;
+    for (const d of dates) {
+      if (d < minD) minD = d;
+      if (d > maxD) maxD = d;
+    }
+    const fmtBr = (d: Date) => {
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
+    };
 
     return {
       headers: mapped.headers,
@@ -178,6 +196,9 @@ export async function parsePedidosSpreadsheet(params: {
       monthFrom: from,
       monthToExclusive: toExclusive,
       pedidosInFile: [...pedidos].filter(Boolean).length,
+      dateMin: fmtBr(minD),
+      dateMax: fmtBr(maxD),
+      sampleDates: dateLabels.length ? dateLabels : [fmtBr(minD), fmtBr(maxD)],
     };
   } finally {
     await safeUnlink(tmpPath);

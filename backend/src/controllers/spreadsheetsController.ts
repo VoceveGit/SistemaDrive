@@ -158,6 +158,11 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
           ignoredTotal?: number;
           ignoredResumo?: number;
           ignoredNoNumero?: number;
+          monthFrom?: string;
+          monthToExclusive?: string;
+          dateMin?: string;
+          dateMax?: string;
+          sampleDates?: string[];
         };
         note?: string;
         headers?: string[];
@@ -206,42 +211,25 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
         return;
       }
 
-      // Solução codada — preview (pedidos / faturamento): tabela tratada + contadores
+      // Solução codada — resumo leve (sem tabela / sem Neon pesado)
       if (rawSnap.codedSolution && rawSnap.codedSummary) {
         const s = rawSnap.codedSummary;
-        const storedRows = Array.isArray(rawSnap.rows) ? rawSnap.rows : [];
-        const pageRows = storedRows.slice(offset, offset + limit);
-        const totalRows = spreadsheet.totalRows || s.validRows;
-        const hasMore = offset + pageRows.length < storedRows.length;
-
         const mustSend =
           s.mode === "faturamento"
             ? (s.numerosNovos ?? 0)
             : (s.rowsToInsert ?? 0);
-        const alreadyInDb =
-          s.mode === "faturamento"
-            ? (s.numerosExistentes ?? 0)
-            : (s.pedidosUnchanged ?? 0);
-
-        const diffRows = pageRows.map((data) => ({
-          isNew: true,
-          isNewInDb: false,
-          mustSend: true,
-          isUpdated: false,
-          mustUpdate: false,
-          changes: [] as { column: string; from: string; to: string }[],
-          data,
-        }));
+        const totalRows = spreadsheet.totalRows || s.validRows;
 
         res.json({
           success: true,
-          headers: rawSnap.headers ?? [],
-          rows: diffRows,
+          headers: [],
+          rows: [],
           summary: {
-            totalRows: pageRows.length,
+            totalRows: 0,
             newRows: mustSend,
             previousRows: 0,
-            alreadyInDb,
+            alreadyInDb:
+              s.mode === "faturamento" ? (s.numerosExistentes ?? 0) : 0,
             mustSend,
             mustUpdate: 0,
             jobTotalRows: totalRows,
@@ -253,23 +241,21 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
           dbCompareMode: "skipped",
           dbCheckSkipped: true,
           skippedColumns: [],
-          dbRowsLoaded: alreadyInDb,
+          dbRowsLoaded: 0,
           syncMode: s.mode,
-          truncated: Boolean(rawSnap.truncated),
-          note:
-            rawSnap.note ??
-            `Preview tratado — ${totalRows} linha(s) válidas. Envio grava no MySQL via solução codada.`,
+          truncated: true,
+          note: rawSnap.note ?? s.note,
           staging: false,
           codedSolution: true,
           codedSummary: s,
           processMessage: spreadsheet.processMessage,
           pagination: {
-            offset,
-            limit,
-            loaded: pageRows.length,
+            offset: 0,
+            limit: 0,
+            loaded: 0,
             total: totalRows,
-            hasMore,
-            nextOffset: hasMore ? offset + pageRows.length : null,
+            hasMore: false,
+            nextOffset: null,
           },
         });
         return;
