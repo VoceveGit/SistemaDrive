@@ -1,5 +1,5 @@
 // backend/src/solucoesAvinor/avinorFaturamento.ts
-// Neon: só resumo (sem linhas). Envio relê planilha → MySQL.
+// Neon: só resumo. Linhas novas: zz_import_staging. Enviar lê staging (sem reler Drive).
 
 import type {
   CodedSolution,
@@ -12,8 +12,16 @@ import { listMysqlColumnsOrdered } from "./snapshotMysql.js";
 import { fetchExistingNumeros, insertBatchDirect } from "./mysqlDirect.js";
 import { extractNumeros, parseFaturamentoSpreadsheet } from "./parseFaturamento.js";
 import { isValidFaturamentoNumero } from "./rowFilters.js";
+import {
+  clearStagingJob,
+  countStagingRows,
+  ensureStagingTable,
+  forEachStagingBatch,
+  insertStagingBatch,
+} from "../services/stagingService.js";
 
 const BATCH = 400;
+const STAGING_WRITE = 200;
 
 async function loadColumns(ctx: CodedSolutionContext) {
   const targetTable =
@@ -28,10 +36,14 @@ async function loadColumns(ctx: CodedSolutionContext) {
   return { targetTable, columns };
 }
 
-async function analyzeFaturamento(
-  ctx: CodedSolutionContext,
-  forCommit: boolean,
-): Promise<{ headers: string[]; summary: FaturamentoSummary }> {
+function asFaturamentoSummary(raw: unknown): FaturamentoSummary | null {
+  if (!raw || typeof raw !== "object") return null;
+  const s = raw as FaturamentoSummary;
+  if (s.mode !== "faturamento") return null;
+  return s;
+}
+
+async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
   const { targetTable, columns } = await loadColumns(ctx);
 
   const parsed = await parseFaturamentoSpreadsheet({
@@ -72,17 +84,21 @@ async function analyzeFaturamento(
     }
   }
 
-  let insertedRowCount = 0;
-  if (forCommit && rowsToInsert.length > 0) {
-    await ctx.onProgress?.(`Inserindo ${rowsToInsert.length} nota(s) nova(s)...`);
-    for (let i = 0; i < rowsToInsert.length; i += BATCH) {
-      insertedRowCount += await insertBatchDirect({
-        settings: ctx.dbSettings,
-        table: targetTable,
-        columns,
-        sheetRows: rowsToInsert.slice(i, i + BATCH),
-      });
-    }
+  await ctx.onProgress?.(
+    `Gravando ${rowsToInsert.length} nota(s) nova(s) no staging...`,
+  );
+  await ensureStagingTable(ctx.dbSettings);
+  await clearStagingJob(ctx.dbSettings, ctx.spreadsheetId);
+
+  for (let i = 0; i < rowsToInsert.length; i += STAGING_WRITE) {
+    const chunk = rowsToInsert.slice(i, i + STAGING_WRITE);
+    await insertStagingBatch({
+      settings: ctx.dbSettings,
+      jobId: ctx.spreadsheetId,
+      companyId: ctx.company.id,
+      startRowNum: i,
+      rows: chunk,
+    });
   }
 
   const ignoredRows = parsed.ignoredResumo + parsed.ignoredNoNumero;
@@ -99,35 +115,71 @@ async function analyzeFaturamento(
     ignoredNoNumero: parsed.ignoredNoNumero,
     numerosNovos,
     numerosExistentes,
-    insertedRowCount: forCommit ? insertedRowCount : numerosNovos,
-    note: forCommit
-      ? `Faturamento OK: ${insertedRowCount} nota(s) inserida(s). ${numerosExistentes} já existiam. ${ignoredRows} ignorada(s).`
-      : `Pronto p/ enviar: ${parsed.validRows.length} linhas válidas, ${numerosNovos} número(s) novo(s), ${numerosExistentes} já no banco. ${ignoredRows} ignorada(s) (resumo/sem numero).`,
+    insertedRowCount: numerosNovos,
+    note:
+      `Pronto p/ enviar: ${rowsToInsert.length} nota(s) no staging ` +
+      `(${numerosExistentes} já no banco). ${ignoredRows} ignorada(s).`,
   };
 
-  return { headers: parsed.headers, summary };
-}
-
-async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
-  const result = await analyzeFaturamento(ctx, false);
   return {
-    headers: result.headers,
+    headers: parsed.headers,
     previewRows: [],
-    importSummary: result.summary,
+    importSummary: summary,
     truncated: true,
   };
 }
 
 async function runCommit(ctx: CodedSolutionContext): Promise<CodedSolutionCommitResult> {
-  const result = await analyzeFaturamento(ctx, true);
-  return { summary: result.summary };
+  const { targetTable, columns } = await loadColumns(ctx);
+  const prev = asFaturamentoSummary(ctx.previousSummary);
+
+  const staged = await countStagingRows(ctx.dbSettings, ctx.spreadsheetId);
+  if (staged === 0 && (prev?.numerosNovos ?? 0) > 0) {
+    throw new Error(
+      "Nenhuma linha no staging. Clique em Processar de novo e depois Enviar.",
+    );
+  }
+
+  let insertedRowCount = 0;
+  if (staged > 0) {
+    await ctx.onProgress?.(`Inserindo ${staged} nota(s) do staging...`);
+    await forEachStagingBatch(ctx.dbSettings, ctx.spreadsheetId, BATCH, async (rows) => {
+      insertedRowCount += await insertBatchDirect({
+        settings: ctx.dbSettings,
+        table: targetTable,
+        columns,
+        sheetRows: rows,
+      });
+    });
+    await clearStagingJob(ctx.dbSettings, ctx.spreadsheetId);
+  }
+
+  const summary: FaturamentoSummary = {
+    mode: "faturamento",
+    codedSolutionId: AVINOR_FATURAMENTO.id,
+    targetTable,
+    fileName: prev?.fileName ?? ctx.file.name ?? "planilha",
+    linesRead: prev?.linesRead ?? staged,
+    validRows: prev?.validRows ?? staged,
+    ignoredRows: prev?.ignoredRows ?? 0,
+    ignoredResumo: prev?.ignoredResumo ?? 0,
+    ignoredNoNumero: prev?.ignoredNoNumero ?? 0,
+    numerosNovos: prev?.numerosNovos ?? insertedRowCount,
+    numerosExistentes: prev?.numerosExistentes ?? 0,
+    insertedRowCount,
+    note:
+      `Faturamento OK: ${insertedRowCount} nota(s) inserida(s). ` +
+      `${prev?.numerosExistentes ?? 0} já existiam no Processar.`,
+  };
+
+  return { summary };
 }
 
 export const AVINOR_FATURAMENTO: CodedSolution = {
   id: "avinor_faturamento",
   label: "Faturamento Avinor",
   description:
-    "Direto planilha→MySQL. Por nome/aliases. Insert se numero não existe. Neon só resumo.",
+    "Processar → staging EXTRACTOR (só números novos). Enviar → INSERT. Neon só resumo.",
   defaultTargetTable: "faturamento_avinor",
   headerRow: 18,
   dataRow: 19,

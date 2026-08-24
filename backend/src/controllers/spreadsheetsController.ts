@@ -608,7 +608,7 @@ export async function sendSpreadsheet(req: Request, res: Response): Promise<void
       return;
     }
 
-    // Solução codada com preview (pedidos / faturamento): reprocessa arquivo e grava
+    // Solução codada com preview (pedidos / faturamento): Enviar usa staging + resumo Neon
     const coded = companyUsesCodedSolution(ctx.spreadsheet.company);
     if (coded?.runCommit && !coded.autoCommitOnImport) {
       let rawCoded: { codedSolution?: boolean; codedSummary?: unknown } = {};
@@ -637,6 +637,9 @@ export async function sendSpreadsheet(req: Request, res: Response): Promise<void
             name: ctx.spreadsheet.fileName,
           },
           dbSettings,
+          previousSummary: rawCoded.codedSummary as
+            | import("../solucoesAvinor/types.js").CodedImportSummary
+            | undefined,
         });
         const s = commit.summary;
         await prisma.spreadsheet.update({

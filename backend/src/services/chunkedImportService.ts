@@ -170,14 +170,15 @@ export async function runChunkedImport(params: {
           headers: [],
           rows: [],
           truncated: true,
-          staging: false,
+          // pedidos/faturamento: linhas em zz_import_staging; Neon só resumo
+          staging: !coded.autoCommitOnImport,
           codedSolution: true,
           codedSummary: importSummary,
           note: importSummary.note,
         }),
       });
       console.log(
-        `[coded] ${coded.id} preview leve: ${importSummary.validRows} linhas válidas (${fileName})`,
+        `[coded] ${coded.id} preview+staging: ${importSummary.validRows} linhas válidas (${fileName})`,
       );
       emit?.("new_spreadsheet", {
         companyId: company.id,

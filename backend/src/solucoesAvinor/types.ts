@@ -77,6 +77,8 @@ export type CodedSolutionContext = {
   drive: drive_v3.Drive;
   file: drive_v3.Schema$File;
   dbSettings: DbSettings;
+  /** Resumo do Processar (Neon) — usado no Enviar sem reler o Drive. */
+  previousSummary?: CodedImportSummary | SnapshotSummary;
   onProgress?: (message: string, processed?: number) => Promise<void>;
 };
 

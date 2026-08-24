@@ -1,6 +1,6 @@
 // backend/src/solucoesAvinor/avinorPedidos.ts
 // Sync igual upload_avinor: apaga janela de meses (Dt.Entrega) + insert total.
-// Neon: só resumo + datas (sem linhas).
+// Neon: só resumo. Linhas: zz_import_staging (job_id = spreadsheetId).
 
 import type {
   CodedSolution,
@@ -12,8 +12,17 @@ import type {
 import { listMysqlColumnsOrdered } from "./snapshotMysql.js";
 import { deleteByDateWindow, insertBatchDirect } from "./mysqlDirect.js";
 import { parsePedidosSpreadsheet } from "./parsePedidos.js";
+import { findColumnIndex } from "./columnMap.js";
+import {
+  clearStagingJob,
+  countStagingRows,
+  ensureStagingTable,
+  forEachStagingBatch,
+  insertStagingBatch,
+} from "../services/stagingService.js";
 
 const BATCH = 400;
+const STAGING_WRITE = 200;
 
 async function loadColumns(ctx: CodedSolutionContext) {
   const targetTable =
@@ -28,13 +37,15 @@ async function loadColumns(ctx: CodedSolutionContext) {
   return { targetTable, columns };
 }
 
-async function analyzePedidos(
-  ctx: CodedSolutionContext,
-  forCommit: boolean,
-): Promise<{
-  headers: string[];
-  summary: PedidosSummary;
-}> {
+function asPedidosSummary(raw: unknown): PedidosSummary | null {
+  if (!raw || typeof raw !== "object") return null;
+  const s = raw as PedidosSummary;
+  if (s.mode !== "pedidos") return null;
+  if (!s.monthFrom || !s.monthToExclusive) return null;
+  return s;
+}
+
+async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
   const { targetTable, columns } = await loadColumns(ctx);
 
   const parsed = await parsePedidosSpreadsheet({
@@ -46,32 +57,26 @@ async function analyzePedidos(
     onProgress: ctx.onProgress,
   });
 
-  const dtCol = columns[parsed.dtColIdx]?.name ?? "Dt.Entrega";
-  const rowsToInsert = parsed.validRows.length;
+  await ctx.onProgress?.(
+    `Gravando ${parsed.validRows.length} linha(s) no staging (EXTRACTOR)...`,
+  );
+  await ensureStagingTable(ctx.dbSettings);
+  await clearStagingJob(ctx.dbSettings, ctx.spreadsheetId);
 
-  let insertedRowCount = 0;
-  let deletedRows = 0;
-
-  if (forCommit) {
-    await ctx.onProgress?.(
-      `Apagando janela ${parsed.monthFrom} ≤ Dt.Entrega < ${parsed.monthToExclusive}...`,
-    );
-    deletedRows = await deleteByDateWindow({
+  for (let i = 0; i < parsed.validRows.length; i += STAGING_WRITE) {
+    const chunk = parsed.validRows.slice(i, i + STAGING_WRITE);
+    await insertStagingBatch({
       settings: ctx.dbSettings,
-      table: targetTable,
-      dtCol,
-      dateFrom: parsed.monthFrom,
-      dateToExclusive: parsed.monthToExclusive,
+      jobId: ctx.spreadsheetId,
+      companyId: ctx.company.id,
+      startRowNum: i,
+      rows: chunk,
     });
-
-    await ctx.onProgress?.(`Inserindo ${rowsToInsert} linha(s)...`);
-    for (let i = 0; i < parsed.validRows.length; i += BATCH) {
-      insertedRowCount += await insertBatchDirect({
-        settings: ctx.dbSettings,
-        table: targetTable,
-        columns,
-        sheetRows: parsed.validRows.slice(i, i + BATCH),
-      });
+    if ((i + chunk.length) % 1000 === 0 || i + chunk.length >= parsed.validRows.length) {
+      await ctx.onProgress?.(
+        `Staging: ${Math.min(i + chunk.length, parsed.validRows.length)}/${parsed.validRows.length}`,
+        Math.min(i + chunk.length, parsed.validRows.length),
+      );
     }
   }
 
@@ -87,41 +92,100 @@ async function analyzePedidos(
     pedidosInFile: parsed.pedidosInFile,
     pedidosChanged: parsed.pedidosInFile,
     pedidosUnchanged: 0,
-    rowsToInsert,
-    insertedRowCount: forCommit ? insertedRowCount : rowsToInsert,
+    rowsToInsert: parsed.validRows.length,
+    insertedRowCount: parsed.validRows.length,
     monthFrom: parsed.monthFrom,
     monthToExclusive: parsed.monthToExclusive,
     dateMin: parsed.dateMin,
     dateMax: parsed.dateMax,
     sampleDates: parsed.sampleDates,
-    note: forCommit
-      ? `Pedidos OK: janela ${parsed.monthFrom} → ${parsed.monthToExclusive} (apagou ${deletedRows}, inseriu ${insertedRowCount}). Datas ${parsed.dateMin} … ${parsed.dateMax}. ${parsed.ignoredTotal} ignorada(s) (TOTAL).`
-      : `Pronto p/ enviar: ${parsed.validRows.length} linhas, ${parsed.pedidosInFile} pedidos. Dt.Entrega ${parsed.dateMin} … ${parsed.dateMax}. Janela ${parsed.monthFrom} ≤ x < ${parsed.monthToExclusive}. ${parsed.ignoredTotal} ignorada(s) (TOTAL).`,
+    note:
+      `Pronto p/ enviar: ${parsed.validRows.length} linhas no staging, ${parsed.pedidosInFile} pedidos. ` +
+      `Dt.Entrega ${parsed.dateMin} … ${parsed.dateMax}. ` +
+      `Janela ${parsed.monthFrom} ≤ x < ${parsed.monthToExclusive}. ` +
+      `${parsed.ignoredTotal} ignorada(s) (TOTAL).`,
   };
 
-  return { headers: parsed.headers, summary };
-}
-
-async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
-  const result = await analyzePedidos(ctx, false);
   return {
-    headers: result.headers,
+    headers: parsed.headers,
     previewRows: [],
-    importSummary: result.summary,
+    importSummary: summary,
     truncated: true,
   };
 }
 
 async function runCommit(ctx: CodedSolutionContext): Promise<CodedSolutionCommitResult> {
-  const result = await analyzePedidos(ctx, true);
-  return { summary: result.summary };
+  const { targetTable, columns } = await loadColumns(ctx);
+  const prev = asPedidosSummary(ctx.previousSummary);
+
+  if (!prev?.monthFrom || !prev.monthToExclusive) {
+    throw new Error(
+      "Resumo da importação incompleto (sem janela de datas). Clique em Processar de novo e depois Enviar.",
+    );
+  }
+
+  const staged = await countStagingRows(ctx.dbSettings, ctx.spreadsheetId);
+  if (staged === 0) {
+    throw new Error(
+      "Nenhuma linha no staging. Clique em Processar de novo (grava as linhas no EXTRACTOR) e depois Enviar.",
+    );
+  }
+
+  const dtIdx = findColumnIndex(
+    columns.map((c) => c.name),
+    "Dt.Entrega",
+    "Dt Entrega",
+  );
+  const dtCol = dtIdx >= 0 ? columns[dtIdx]!.name : "Dt.Entrega";
+
+  await ctx.onProgress?.(
+    `Apagando janela ${prev.monthFrom} ≤ Dt.Entrega < ${prev.monthToExclusive}...`,
+  );
+  const deletedRows = await deleteByDateWindow({
+    settings: ctx.dbSettings,
+    table: targetTable,
+    dtCol,
+    dateFrom: prev.monthFrom,
+    dateToExclusive: prev.monthToExclusive,
+  });
+
+  await ctx.onProgress?.(`Inserindo ${staged} linha(s) do staging...`);
+  let insertedRowCount = 0;
+  await forEachStagingBatch(ctx.dbSettings, ctx.spreadsheetId, BATCH, async (rows) => {
+    insertedRowCount += await insertBatchDirect({
+      settings: ctx.dbSettings,
+      table: targetTable,
+      columns,
+      sheetRows: rows,
+    });
+    await ctx.onProgress?.(
+      `Inseridas ${insertedRowCount}/${staged}...`,
+      insertedRowCount,
+    );
+  });
+
+  await clearStagingJob(ctx.dbSettings, ctx.spreadsheetId);
+
+  const summary: PedidosSummary = {
+    ...prev,
+    targetTable,
+    rowsToInsert: staged,
+    validRows: staged,
+    insertedRowCount,
+    note:
+      `Pedidos OK: janela ${prev.monthFrom} → ${prev.monthToExclusive} ` +
+      `(apagou ${deletedRows}, inseriu ${insertedRowCount}). ` +
+      `Datas ${prev.dateMin ?? "?"} … ${prev.dateMax ?? "?"}.`,
+  };
+
+  return { summary };
 }
 
 export const AVINOR_PEDIDOS: CodedSolution = {
   id: "avinor_pedidos",
   label: "Pedidos Avinor",
   description:
-    "Direto planilha→MySQL. TOTAL ignorado. Fill-down. Apaga janela Dt.Entrega e reinsere. Neon só resumo.",
+    "Processar → staging EXTRACTOR. Enviar → DELETE janela + INSERT. Neon só resumo.",
   defaultTargetTable: "base_pedidos_avinor",
   headerRow: 7,
   dataRow: 8,

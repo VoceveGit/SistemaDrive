@@ -32,7 +32,17 @@ function looksLikeBrDate(s: string): boolean {
 /** Converte célula SheetJS → string; datas em DD/MM/YYYY. */
 export function sheetJsCellToString(value: unknown): string {
   if (value == null || value === "") return "";
-  if (value instanceof Date) return formatBr(value);
+  if (value instanceof Date) {
+    // SheetJS costuma devolver meia-noite UTC em células só-data
+    const useUtc =
+      value.getUTCHours() === 0 &&
+      value.getUTCMinutes() === 0 &&
+      value.getUTCSeconds() === 0;
+    const d = useUtc
+      ? new Date(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate())
+      : value;
+    return formatBr(d);
+  }
   if (typeof value === "number") {
     // Serial Excel moderno (~1982+)
     if (value >= 30000 && value < 80000) {
