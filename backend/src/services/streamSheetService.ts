@@ -22,16 +22,10 @@ function excelSerialToDate(serial: number): Date {
   return new Date(utc);
 }
 
-function isExcelDateSerial(n: number): boolean {
-  // ~1954–2119; evita confundir com IDs/anos (ex.: 2026)
-  return Number.isFinite(n) && n > 20000 && n < 80000;
-}
-
-/** Formata data local como DD/MM/YYYY (padrão planilha BR). */
-function formatDateBr(d: Date): string {
+/** Formata data como DD/MM/YYYY (padrão planilha BR). Serial Excel → UTC. */
+function formatDateBrFromSerial(d: Date): string {
   if (Number.isNaN(d.getTime())) return "";
   const p = (n: number) => String(n).padStart(2, "0");
-  // Usar UTC do serial Excel pra não deslocar o dia
   return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`;
 }
 
@@ -41,28 +35,81 @@ function formatDateBrLocal(d: Date): string {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 
-function cellToString(value: unknown): string {
-  if (value == null) return "";
-  if (value instanceof Date) return formatDateBrLocal(value);
+/**
+ * Igual pandas/openpyxl: só é data se o Excel marcar como data (numFmt),
+ * não qualquer número no range de serial (Cliente 20783 ≠ 24/11/1956).
+ */
+function isExcelDateNumFmt(numFmt: string | undefined | null): boolean {
+  if (!numFmt) return false;
+  const f = String(numFmt).trim().toLowerCase();
+  if (!f || f === "general" || f === "@") return false;
+  // Formatos numéricos puros (#,##0 / 0.00 / %) — não data
+  if (/^[#0,.E+\-\s%()]+$/i.test(f) && !/[dmy]/i.test(f)) return false;
+  return /[dmy]|yyyy|dddd|mmmm/i.test(f);
+}
+
+type ExcelCellLike = {
+  value?: unknown;
+  text?: string;
+  numFmt?: string;
+  type?: number | string;
+};
+
+/**
+ * Lê célula como o pandas: Date tipada ou número+numFmt de data → DD/MM/YYYY.
+ * Número sem formato de data (IDs) permanece número.
+ */
+function excelCellToString(cell: ExcelCellLike | null | undefined, fallback: unknown): string {
+  const value = cell?.value !== undefined && cell?.value !== null ? cell.value : fallback;
+  const numFmt = cell?.numFmt;
+  const cellType = cell?.type;
+  // ExcelJS ValueType.Date === 4
+  const typedAsDate = cellType === 4 || cellType === "Date";
+
+  if (value == null || value === "") return "";
+
+  if (value instanceof Date) {
+    return formatDateBrLocal(value);
+  }
+
   if (typeof value === "number") {
-    if (isExcelDateSerial(value)) return formatDateBr(excelSerialToDate(value));
+    if (typedAsDate || isExcelDateNumFmt(numFmt)) {
+      return formatDateBrFromSerial(excelSerialToDate(value));
+    }
+    // Preferir texto formatado só quando for data (evita locale estranho em número)
     return String(value);
   }
+
   if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+
   if (typeof value === "object") {
     const obj = value as {
       text?: unknown;
       result?: unknown;
       richText?: Array<{ text?: string }>;
-      formula?: unknown;
     };
     if (Array.isArray(obj.richText)) {
       return sanitizeExcelText(obj.richText.map((p) => p.text ?? "").join(""));
     }
-    if ("result" in obj) return cellToString(obj.result);
+    if ("result" in obj) {
+      return excelCellToString(
+        { value: obj.result, numFmt, type: cellType },
+        obj.result,
+      );
+    }
     if ("text" in obj) return sanitizeExcelText(String(obj.text ?? ""));
   }
-  return sanitizeExcelText(String(value));
+
+  // Texto já formatado no Excel (ex.: "01/08/2026")
+  if (typeof value === "string") {
+    const t = sanitizeExcelText(value);
+    if (t) return t;
+  }
+
+  // Último recurso: text da célula se value veio vazio mas text tem conteúdo
+  if (cell?.text) return sanitizeExcelText(cell.text);
+
+  return sanitizeExcelText(String(value ?? ""));
 }
 
 function isRowEmpty(row: string[]): boolean {
@@ -213,21 +260,15 @@ export async function streamXlsxInBatches(
       const cells: string[] = [];
       const maxCol = Math.max(values.length - 1, colCount || 0, headers.length || 0);
       for (let c = 1; c <= maxCol; c++) {
-        // Preferir getCell: com styles em cache o ExcelJS tipa Date corretamente
-        let raw: unknown = values[c];
+        let cell: ExcelCellLike | undefined;
         try {
-          const cell = (
-            row as { getCell?: (n: number) => { value?: unknown; text?: string } }
+          cell = (
+            row as { getCell?: (n: number) => ExcelCellLike }
           ).getCell?.(c);
-          if (cell) {
-            if (cell.value !== undefined && cell.value !== null) raw = cell.value;
-            // Se value veio numérico sem ser serial claro, text formatado (01/08/2026) ajuda
-            else if (cell.text) raw = cell.text;
-          }
         } catch {
-          /* usa values[c] */
+          cell = undefined;
         }
-        cells.push(cellToString(raw));
+        cells.push(excelCellToString(cell, values[c]));
       }
 
       if (rowNumber === headerRowNum) {
