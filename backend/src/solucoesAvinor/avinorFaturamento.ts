@@ -12,7 +12,7 @@ import { fetchExistingNumeros, insertBatchDirect } from "./mysqlDirect.js";
 import { extractNumeros, parseFaturamentoSpreadsheet } from "./parseFaturamento.js";
 import { isValidFaturamentoNumero } from "./rowFilters.js";
 
-const MAX_PREVIEW_ROWS = 4000;
+const MAX_PREVIEW_ROWS = 10;
 const BATCH = 400;
 
 async function loadColumns(ctx: CodedSolutionContext) {

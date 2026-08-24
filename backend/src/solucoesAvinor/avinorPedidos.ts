@@ -12,7 +12,7 @@ import { listMysqlColumnsOrdered } from "./snapshotMysql.js";
 import { deleteByDateWindow, insertBatchDirect } from "./mysqlDirect.js";
 import { parsePedidosSpreadsheet } from "./parsePedidos.js";
 
-const MAX_PREVIEW_ROWS = 4000;
+const MAX_PREVIEW_ROWS = 10;
 const BATCH = 400;
 
 async function loadColumns(ctx: CodedSolutionContext) {
@@ -98,7 +98,7 @@ async function analyzePedidos(
     monthToExclusive: parsed.monthToExclusive,
     note: forCommit
       ? `Pedidos OK: janela ${parsed.monthFrom} → ${parsed.monthToExclusive} (apagou ${deletedRows}, inseriu ${insertedRowCount}). ${parsed.pedidosInFile} pedido(s), ${parsed.ignoredTotal} linha(s) ignorada(s).`
-      : `Preview: ${parsed.validRows.length} linha(s), ${parsed.pedidosInFile} pedido(s). Janela ${parsed.monthFrom} ≤ Dt.Entrega < ${parsed.monthToExclusive}. Enviar apaga a janela e reinsere tudo. ${parsed.ignoredTotal} ignorada(s) (TOTAL/vazio).`,
+      : `Preview (amostra ${MAX_PREVIEW_ROWS}): ${parsed.validRows.length} linha(s) válidas, ${parsed.pedidosInFile} pedido(s). Janela ${parsed.monthFrom} ≤ Dt.Entrega < ${parsed.monthToExclusive}. Enviar apaga a janela e reinsere tudo. ${parsed.ignoredTotal} ignorada(s) (TOTAL/vazio).`,
   };
 
   return {

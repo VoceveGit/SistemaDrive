@@ -16,14 +16,17 @@ function normalizeIgnoreToken(value: string): string {
   return sanitizeExcelText(value).toLowerCase().replace(/\s+/g, " ");
 }
 
-/** Excel serial (dias desde 1899-12-30) → Date UTC meia-noite. */
+/** Excel serial → Date via época Unix (evita new Date(ano,mês,dia) com ano 0–99). */
 function excelSerialToDate(serial: number): Date {
-  const utc = Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000;
-  return new Date(utc);
+  // 25569 = dias entre 1899-12-30 (Excel, c/ bug 1900) e 1970-01-01
+  const utcDays = Math.floor(serial - 25569);
+  const utcMs = utcDays * 86400 * 1000;
+  const fractionalDay = serial - Math.floor(serial) + 1e-7;
+  const totalSeconds = Math.floor(86400 * fractionalDay);
+  return new Date(utcMs + totalSeconds * 1000);
 }
 
-/** Formata data como DD/MM/YYYY (padrão planilha BR). Serial Excel → UTC. */
-function formatDateBrFromSerial(d: Date): string {
+function formatDateBrUtc(d: Date): string {
   if (Number.isNaN(d.getTime())) return "";
   const p = (n: number) => String(n).padStart(2, "0");
   return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()}`;
@@ -35,15 +38,23 @@ function formatDateBrLocal(d: Date): string {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 
+/** Texto formatado pelo Excel tipo 01/08/2026 ou 1/8/26. */
+function looksLikeBrDateText(s: string): boolean {
+  return /^\d{1,2}\/\d{1,2}\/\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/.test(s.trim());
+}
+
 /**
- * Igual pandas/openpyxl: só é data se o Excel marcar como data (numFmt),
- * não qualquer número no range de serial (Cliente 20783 ≠ 24/11/1956).
+ * Serial Excel "moderno" (~1982–2119).
+ * Evita 2026 (ano) → 18/07/1905 e IDs ~20783 → 24/11/1956.
  */
+function isPlausibleExcelDateSerial(n: number): boolean {
+  return Number.isFinite(n) && n >= 30000 && n < 80000;
+}
+
 function isExcelDateNumFmt(numFmt: string | undefined | null): boolean {
   if (!numFmt) return false;
   const f = String(numFmt).trim().toLowerCase();
   if (!f || f === "general" || f === "@") return false;
-  // Formatos numéricos puros (#,##0 / 0.00 / %) — não data
   if (/^[#0,.E+\-\s%()]+$/i.test(f) && !/[dmy]/i.test(f)) return false;
   return /[dmy]|yyyy|dddd|mmmm/i.test(f);
 }
@@ -56,27 +67,41 @@ type ExcelCellLike = {
 };
 
 /**
- * Lê célula como o pandas: Date tipada ou número+numFmt de data → DD/MM/YYYY.
- * Número sem formato de data (IDs) permanece número.
+ * Como pandas/openpyxl: usa o que o Excel mostra quando for data;
+ * número só vira data se for serial plausível + formato/tipo data.
  */
 function excelCellToString(cell: ExcelCellLike | null | undefined, fallback: unknown): string {
   const value = cell?.value !== undefined && cell?.value !== null ? cell.value : fallback;
   const numFmt = cell?.numFmt;
   const cellType = cell?.type;
-  // ExcelJS ValueType.Date === 4
   const typedAsDate = cellType === 4 || cellType === "Date";
+  const dateFmt = typedAsDate || isExcelDateNumFmt(numFmt);
 
-  if (value == null || value === "") return "";
-
-  if (value instanceof Date) {
-    return formatDateBrLocal(value);
+  // 1) Texto formatado da célula (o que o usuário vê no Excel) — prioridade pra datas
+  const formatted = cell?.text ? sanitizeExcelText(cell.text) : "";
+  if (dateFmt && formatted && looksLikeBrDateText(formatted)) {
+    return formatted;
   }
 
+  if (value == null || value === "") {
+    return formatted || "";
+  }
+
+  // 2) Date tipada — rejeita anos absurdos (bug 2 dígitos / serial errado)
+  if (value instanceof Date) {
+    const y = value.getFullYear();
+    if (y >= 1980 && y <= 2100) return formatDateBrLocal(value);
+    if (formatted && looksLikeBrDateText(formatted)) return formatted;
+    // Date lixo (ex. 1905): não usar
+    return formatted || "";
+  }
+
+  // 3) Número: só serial Excel moderno + indício de data
   if (typeof value === "number") {
-    if (typedAsDate || isExcelDateNumFmt(numFmt)) {
-      return formatDateBrFromSerial(excelSerialToDate(value));
+    if (dateFmt && isPlausibleExcelDateSerial(value)) {
+      return formatDateBrUtc(excelSerialToDate(value));
     }
-    // Preferir texto formatado só quando for data (evita locale estranho em número)
+    if (formatted && looksLikeBrDateText(formatted)) return formatted;
     return String(value);
   }
 
@@ -93,23 +118,19 @@ function excelCellToString(cell: ExcelCellLike | null | undefined, fallback: unk
     }
     if ("result" in obj) {
       return excelCellToString(
-        { value: obj.result, numFmt, type: cellType },
+        { value: obj.result, text: cell?.text, numFmt, type: cellType },
         obj.result,
       );
     }
     if ("text" in obj) return sanitizeExcelText(String(obj.text ?? ""));
   }
 
-  // Texto já formatado no Excel (ex.: "01/08/2026")
   if (typeof value === "string") {
     const t = sanitizeExcelText(value);
     if (t) return t;
   }
 
-  // Último recurso: text da célula se value veio vazio mas text tem conteúdo
-  if (cell?.text) return sanitizeExcelText(cell.text);
-
-  return sanitizeExcelText(String(value ?? ""));
+  return formatted || sanitizeExcelText(String(value ?? ""));
 }
 
 function isRowEmpty(row: string[]): boolean {

@@ -416,7 +416,8 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
         </ul>
         {diff.truncated && (
           <p className="mt-2 text-xs text-text-muted">
-            Tabela abaixo: amostra das primeiras linhas tratadas (como vão pro MySQL).
+            Tabela: amostra de {formatNumber(rows.length)} linhas (só pra validar data/TOTAL). O
+            envio processa o arquivo inteiro.
           </p>
         )}
       </div>
