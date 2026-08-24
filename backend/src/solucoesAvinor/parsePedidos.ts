@@ -1,13 +1,8 @@
 // backend/src/solucoesAvinor/parsePedidos.ts
-// Pedidos Avinor: filtro TOTAL → ffill todas cols → map por nome.
-// Janela de mês = min/max Dt.Entrega (igual upload_avinor).
+// Pedidos Avinor: filtro TOTAL → ffill → map por nome (igual upload_avinor).
 
 import type { drive_v3 } from "googleapis";
-import {
-  downloadDriveFileToTemp,
-  safeUnlink,
-  streamSheetFileInBatches,
-} from "../services/streamSheetService.js";
+import { downloadDriveFileToTemp, safeUnlink } from "../services/streamSheetService.js";
 import { parseDateTimeCell } from "./conversoes.js";
 import {
   dedupeHeadersPandasStyle,
@@ -16,16 +11,14 @@ import {
   mapRowsToDbColumnOrder,
 } from "./columnMap.js";
 import type { MysqlColMeta } from "./conversoes.js";
+import { loadAvinorXlsx } from "./excelLoadAvinor.js";
 import { padRow } from "./rowFilters.js";
 
-const BATCH = 400;
 /** Igual skipfooter=3 do pandas no script antigo. */
 const SKIP_FOOTER_ROWS = 3;
 
 export type PedidosParseResult = {
-  /** Headers na ordem do MySQL */
   headers: string[];
-  /** Linhas já mapeadas na ordem do MySQL */
   validRows: string[][];
   linesRead: number;
   ignoredTotal: number;
@@ -47,11 +40,6 @@ function isEmptyDesc(desc: string): boolean {
   return String(desc ?? "").trim() === "";
 }
 
-/**
- * Janela do script antigo:
- * from = 1º dia do mês da data mais antiga
- * toExclusive = 1º dia do mês seguinte à data mais recente
- */
 export function pedidosMonthWindowFromDates(dates: Date[]): {
   from: string;
   toExclusive: string;
@@ -87,48 +75,21 @@ export async function parsePedidosSpreadsheet(params: {
 }): Promise<PedidosParseResult> {
   const { drive, file, dbColumns, headerRow, dataRow, onProgress } = params;
   let tmpPath: string | null = null;
-  const rawRows: string[][] = [];
-  let sheetHeaders: string[] = [];
-  let linesRead = 0;
 
   try {
     tmpPath = await downloadDriveFileToTemp(drive, file);
-    await onProgress?.("Pedidos Avinor: lendo planilha...");
+    await onProgress?.("Pedidos Avinor: baixando e lendo...");
 
-    await streamSheetFileInBatches(
-      tmpPath,
-      {
-        headerRow,
-        dataRow,
-        skipEmptyRows: true,
-        autofillEmpty: false,
-      },
-      BATCH,
-      {
-        onHeaders: async (h) => {
-          sheetHeaders = dedupeHeadersPandasStyle(h);
-        },
-        onBatch: async (batch) => {
-          for (const raw of batch) {
-            linesRead += 1;
-            rawRows.push(padRow(raw, sheetHeaders.length || raw.length));
-          }
-        },
-        onProgress: async (n) => {
-          await onProgress?.(`Lidas ${n} linhas...`, n);
-        },
-      },
-    );
+    const loaded = await loadAvinorXlsx({
+      filePath: tmpPath,
+      headerRow,
+      dataRow,
+      skipFooter: SKIP_FOOTER_ROWS,
+      onProgress,
+    });
 
-    if (!sheetHeaders.length) {
-      throw new Error("Cabeçalho não encontrado — confira linha 7 (títulos).");
-    }
-
-    // skipfooter=3 (script antigo)
-    const withoutFooter =
-      rawRows.length > SKIP_FOOTER_ROWS
-        ? rawRows.slice(0, rawRows.length - SKIP_FOOTER_ROWS)
-        : rawRows;
+    const sheetHeaders = dedupeHeadersPandasStyle(loaded.headers);
+    const linesRead = loaded.rows.length;
 
     const descIdx = findColumnIndex(sheetHeaders, "Descrição", "Descricao");
     const pedidoIdxSheet = findColumnIndex(sheetHeaders, "Pedido");
@@ -146,7 +107,8 @@ export async function parsePedidosSpreadsheet(params: {
 
     let ignoredTotal = 0;
     const filtered: string[][] = [];
-    for (const row of withoutFooter) {
+    for (const raw of loaded.rows) {
+      const row = padRow(raw, sheetHeaders.length);
       const desc = row[descIdx] ?? "";
       if (isTotalDescricao(desc) || isEmptyDesc(desc)) {
         ignoredTotal += 1;
@@ -158,7 +120,6 @@ export async function parsePedidosSpreadsheet(params: {
     // fill-down em TODAS as colunas (depois do filtro) — igual .ffill()
     const filled = ffillAllColumns(filtered);
 
-    // remove linhas sem Pedido após fill
     const withPedido: string[][] = [];
     for (const row of filled) {
       if (!String(row[pedidoIdxSheet] ?? "").trim()) {
@@ -191,13 +152,13 @@ export async function parsePedidosSpreadsheet(params: {
       const dt = parseDateTimeCell(row[dtColIdx] ?? "");
       if (!dt) continue;
       const d = new Date(dt.replace(" ", "T"));
-      if (!Number.isNaN(d.getTime())) dates.push(d);
+      if (!Number.isNaN(d.getTime()) && d.getFullYear() >= 1980) dates.push(d);
     }
 
     if (dates.length === 0) {
       const sample = mapped.rows
-        .slice(0, 3)
-        .map((r) => String(r[dtColIdx] ?? ""))
+        .slice(0, 5)
+        .map((r) => `"${String(r[dtColIdx] ?? "")}"`)
         .join(" | ");
       throw new Error(
         `Nenhuma Dt.Entrega válida na planilha (amostra: ${sample}). ` +
