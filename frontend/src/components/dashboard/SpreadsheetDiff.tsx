@@ -734,7 +734,7 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
                     <td className="whitespace-nowrap px-3 py-2">
                       {row.mustSend && (
                         <span className="rounded bg-accent-green/20 px-2 py-0.5 text-xs text-accent-green">
-                          {isFirstInQueue ? "PRÓXIMO" : "NOVO"}
+                          {codedSummary ? "OK" : isFirstInQueue ? "PRÓXIMO" : "NOVO"}
                         </span>
                       )}
                       {isUpdated && (
