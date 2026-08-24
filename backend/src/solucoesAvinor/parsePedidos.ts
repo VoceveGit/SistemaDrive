@@ -194,6 +194,17 @@ export async function parsePedidosSpreadsheet(params: {
       if (!Number.isNaN(d.getTime())) dates.push(d);
     }
 
+    if (dates.length === 0) {
+      const sample = mapped.rows
+        .slice(0, 3)
+        .map((r) => String(r[dtColIdx] ?? ""))
+        .join(" | ");
+      throw new Error(
+        `Nenhuma Dt.Entrega válida na planilha (amostra: ${sample}). ` +
+          `Esperado DD/MM/YYYY — confira a leitura das datas.`,
+      );
+    }
+
     const { from, toExclusive } = pedidosMonthWindowFromDates(dates);
 
     return {

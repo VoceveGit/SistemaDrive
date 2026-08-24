@@ -22,18 +22,40 @@ export function parseBigIntCell(raw: string): number | null {
   return Math.trunc(n);
 }
 
+function formatMysqlDateTime(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function formatMysqlDateTimeUTC(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+
+/**
+ * Converte célula de data da planilha Avinor.
+ * Prioridade: serial Excel → DD/MM/YYYY (BR) → ISO → Date parse seguro.
+ * Rejeita ano isolado ("2026") — isso gerava janela falsa em janeiro.
+ */
 export function parseDateTimeCell(raw: string): string | null {
   const s = String(raw ?? "").trim();
   if (!s) return null;
 
+  // Ano sozinho (bug de leitura) — não inventar 01/01
+  if (/^\d{4}$/.test(s)) return null;
+
+  // Serial Excel (número puro no range de datas)
   if (/^\d+(\.\d+)?$/.test(s)) {
     const serial = Number(s);
     if (serial > 20000 && serial < 80000) {
-      const utc = Date.UTC(1899, 11, 30) + serial * 86400000;
-      return formatMysqlDateTime(new Date(utc));
+      const utc = Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000;
+      return formatMysqlDateTimeUTC(new Date(utc));
     }
+    // Número fora do range de serial (ex.: 2026) — não é data
+    return null;
   }
 
+  // DD/MM/YYYY ou DD/MM/YY (padrão BR das planilhas Avinor)
   const br = s.match(
     /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/,
   );
@@ -42,6 +64,7 @@ export function parseDateTimeCell(raw: string): string | null {
     const month = Number(br[2]) - 1;
     let year = Number(br[3]);
     if (year < 100) year += 2000;
+    if (month < 0 || month > 11 || day < 1 || day > 31) return null;
     const d = new Date(
       year,
       month,
@@ -53,14 +76,29 @@ export function parseDateTimeCell(raw: string): string | null {
     if (!Number.isNaN(d.getTime())) return formatMysqlDateTime(d);
   }
 
+  // ISO / MySQL: 2026-08-01 ou 2026-08-01 00:00:00 / com T
+  const iso = s.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?Z?)?$/,
+  );
+  if (iso) {
+    const d = new Date(
+      Number(iso[1]),
+      Number(iso[2]) - 1,
+      Number(iso[3]),
+      Number(iso[4] ?? 0),
+      Number(iso[5] ?? 0),
+      Number(iso[6] ?? 0),
+    );
+    if (!Number.isNaN(d.getTime())) return formatMysqlDateTime(d);
+  }
+
+  // Último recurso: só strings que parecem data (evita new Date("2026"))
+  if (!/\d{1,4}[-/]\d{1,2}[-/]\d{1,4}/.test(s) && !/[a-z]{3}/i.test(s)) {
+    return null;
+  }
   const d = new Date(s);
   if (!Number.isNaN(d.getTime())) return formatMysqlDateTime(d);
   return null;
-}
-
-function formatMysqlDateTime(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 export function convertCellForMysql(raw: string, col: MysqlColMeta): unknown {

@@ -453,7 +453,7 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
         </p>
       )}
 
-      {diff.dbCheckSkipped ? (
+      {diff.dbCheckSkipped && !diff.codedSolution ? (
         <div className="mb-4 rounded-lg border border-accent-amber/30 bg-accent-amber/10 px-4 py-3 text-sm text-accent-amber">
           Não foi possível comparar com o banco — verifique a conexão e a tabela da empresa.
         </div>
@@ -508,13 +508,41 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <Chip color="green" label={`${formatNumber(summary.mustSend)} para enviar`} />
-        <Chip color="amber" label={`${formatNumber(summary.mustUpdate ?? 0)} atualizar`} />
-        <Chip color="amber" label={`${formatNumber(summary.alreadyInDb)} já no banco`} />
-        <Chip
-          color="neutral"
-          label={`${formatNumber(summary.totalRows - summary.newRows)} sem alteração`}
-        />
+        {codedSummary ? (
+          codedSummary.mode === "pedidos" ? (
+            <>
+              <Chip
+                color="green"
+                label={`${formatNumber(codedSummary.rowsToInsert ?? 0)} na janela (reinserir)`}
+              />
+              <Chip
+                color="amber"
+                label={`${formatNumber(codedSummary.ignoredRows)} ignoradas`}
+              />
+            </>
+          ) : (
+            <>
+              <Chip
+                color="green"
+                label={`${formatNumber(codedSummary.numerosNovos ?? 0)} números novos`}
+              />
+              <Chip
+                color="amber"
+                label={`${formatNumber(codedSummary.numerosExistentes ?? 0)} já no banco`}
+              />
+            </>
+          )
+        ) : (
+          <>
+            <Chip color="green" label={`${formatNumber(summary.mustSend)} para enviar`} />
+            <Chip color="amber" label={`${formatNumber(summary.mustUpdate ?? 0)} atualizar`} />
+            <Chip color="amber" label={`${formatNumber(summary.alreadyInDb)} já no banco`} />
+            <Chip
+              color="neutral"
+              label={`${formatNumber(summary.totalRows - summary.newRows)} sem alteração`}
+            />
+          </>
+        )}
 
         <button
           type="button"
@@ -558,9 +586,25 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
       {canSend ? (
         <div className="mb-4 rounded-lg border border-border bg-bg-card p-4">
           <p className="mb-3 text-xs text-text-secondary">
-            <strong>Enviar somente 1</strong> manda a linha marcada como PRÓXIMO.{" "}
-            <strong>Enviar selecionados</strong>: 1º clique ativa os checkboxes, marque as NOVO, 2º
-            clique envia. <strong>Enviar todos</strong> manda o job completo do staging.
+            {codedSummary ? (
+              codedSummary.mode === "pedidos" ? (
+                <>
+                  <strong>Enviar todos</strong> apaga a janela de meses no MySQL e reinsere as
+                  linhas tratadas da planilha (igual ao sistema antigo Avinor).
+                </>
+              ) : (
+                <>
+                  <strong>Enviar todos</strong> insere só os <strong>números</strong> que ainda não
+                  existem no banco.
+                </>
+              )
+            ) : (
+              <>
+                <strong>Enviar somente 1</strong> manda a linha marcada como PRÓXIMO.{" "}
+                <strong>Enviar selecionados</strong>: 1º clique ativa os checkboxes, marque as NOVO,
+                2º clique envia. <strong>Enviar todos</strong> manda o job completo do staging.
+              </>
+            )}
           </p>
           <div className="flex flex-wrap gap-2">
             <button
