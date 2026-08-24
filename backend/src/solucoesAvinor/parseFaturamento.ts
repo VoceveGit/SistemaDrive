@@ -24,6 +24,7 @@ export type FaturamentoParseResult = {
   ignoredNoNumero: number;
   stoppedAtFooter: boolean;
   numeroColIdx: number;
+  missingColumns: string[];
 };
 
 export async function parseFaturamentoSpreadsheet(params: {
@@ -114,6 +115,7 @@ export async function parseFaturamentoSpreadsheet(params: {
       ignoredNoNumero,
       stoppedAtFooter,
       numeroColIdx,
+      missingColumns: mapped.missingColumns,
     };
   } finally {
     await safeUnlink(tmpPath);

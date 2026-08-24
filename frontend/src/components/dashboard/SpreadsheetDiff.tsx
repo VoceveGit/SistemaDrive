@@ -90,8 +90,11 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
           setJobTotal(total);
         }
 
-        // Snapshot ou resumo leve codado: sem paginar linhas
-        if (page.codedSolution && (page.snapshot || page.codedSummary)) {
+        // Snapshot, resumo leve ou erro codado: sem paginar linhas
+        if (
+          page.codedSolution &&
+          (page.snapshot || page.codedSummary || page.codedError)
+        ) {
           setRows([]);
           setJobTotal(
             page.snapshot?.insertedRowCount ??
@@ -418,13 +421,16 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
                   Já no banco:{" "}
                   <strong>{formatNumber(codedSummary.numerosExistentes ?? 0)}</strong>
                 </li>
+                <li className="sm:col-span-2 text-xs text-text-muted">
+                  Insert só se o <code className="font-mono">numero</code> ainda não existe no
+                  MySQL.
+                </li>
               </>
             )}
           </ul>
 
           <p className="mt-4 text-xs text-text-muted">
-            Sem lista linha a linha (economiza Neon). Enviar relê a planilha no servidor e grava
-            direto no MySQL — igual ao sistema antigo.
+            Sem lista linha a linha. Dados no staging (EXTRACTOR); Enviar grava direto no MySQL.
           </p>
 
           {status === "pending" && (
@@ -472,6 +478,22 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
               </li>
             </ul>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (diff.codedSolution && diff.codedError) {
+    return (
+      <div className="min-w-0 max-w-full border-t border-border bg-bg-surface p-4">
+        <div className="rounded-xl border border-accent-red/30 bg-accent-red/10 p-6">
+          <h3 className="text-base font-semibold text-text-primary">
+            Solução codada — falhou no Processar
+          </h3>
+          <p className="mt-2 text-sm text-text-secondary">{diff.codedError}</p>
+          <p className="mt-4 text-xs text-text-muted">
+            Use Processar de novo. Neste modo não há comparativo linha a linha.
+          </p>
         </div>
       </div>
     );

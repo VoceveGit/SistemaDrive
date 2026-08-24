@@ -260,6 +260,57 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
         });
         return;
       }
+
+      // Solução codada — erro no Processar (sem preview antigo de staging)
+      const codedErr =
+        typeof (rawSnap as { codedError?: unknown }).codedError === "string"
+          ? String((rawSnap as { codedError: string }).codedError)
+          : null;
+      if (
+        (rawSnap.codedSolution && codedErr) ||
+        (companyUsesCodedSolution(spreadsheet.company) &&
+          spreadsheet.status === "error")
+      ) {
+        const msg = codedErr || spreadsheet.processMessage || "Erro no processamento";
+        res.json({
+          success: true,
+          headers: [],
+          rows: [],
+          summary: {
+            totalRows: 0,
+            newRows: 0,
+            previousRows: 0,
+            alreadyInDb: 0,
+            mustSend: 0,
+            mustUpdate: 0,
+            jobTotalRows: 0,
+          },
+          dbWindowDays: 0,
+          dateColumnUsed: null,
+          compareColumnUsed: null,
+          dbCompareLimit: null,
+          dbCompareMode: "skipped",
+          dbCheckSkipped: true,
+          skippedColumns: [],
+          dbRowsLoaded: 0,
+          syncMode: "coded_error",
+          truncated: true,
+          note: msg,
+          staging: false,
+          codedSolution: true,
+          codedError: msg,
+          processMessage: spreadsheet.processMessage,
+          pagination: {
+            offset: 0,
+            limit: 0,
+            loaded: 0,
+            total: 0,
+            hasMore: false,
+            nextOffset: null,
+          },
+        });
+        return;
+      }
     } catch {
       /* segue fluxo normal */
     }

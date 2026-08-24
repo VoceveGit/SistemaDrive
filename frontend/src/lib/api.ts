@@ -178,6 +178,7 @@ export type DiffResult = {
     dateMax?: string;
     sampleDates?: string[];
   };
+  codedError?: string;
   processMessage?: string | null;
   pagination?: {
     offset: number;

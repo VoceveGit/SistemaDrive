@@ -274,9 +274,27 @@ export async function runChunkedImport(params: {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro no processamento";
     console.error(`[chunkedImport] ${fileName}:`, error);
+    const codedFail = companyUsesCodedSolution(company);
     await setProgress(spreadsheetId, {
       status: "error",
       processMessage: message,
+      // Evita cair no preview antigo (staging) depois de falha da solução codada
+      ...(codedFail
+        ? {
+            rawData: JSON.stringify({
+              headers: [],
+              rows: [],
+              truncated: true,
+              staging: false,
+              codedSolution: true,
+              codedError: message,
+              note: message,
+            }),
+            totalRows: 0,
+            processedRows: 0,
+            newRows: 0,
+          }
+        : {}),
     }).catch(() => undefined);
 
     emit?.("spreadsheet_auto_processed", {

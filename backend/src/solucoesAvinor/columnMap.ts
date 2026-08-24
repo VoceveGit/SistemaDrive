@@ -4,7 +4,7 @@
 import { sanitizeExcelText } from "../services/sheetParseService.js";
 import type { MysqlColMeta } from "./conversoes.js";
 
-/** Chave estável pra casar planilha × MySQL (ignora _x000d_, acento, case). */
+/** Chave estável pra casar planilha × MySQL (ignora _x000d_, acento, pontuação, case). */
 export function headerMatchKey(name: string): string {
   return sanitizeExcelText(name)
     .replace(/_x000[dDaA]_/gi, "")
@@ -12,7 +12,7 @@ export function headerMatchKey(name: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/\s+/g, "")
-    .replace(/[^a-z0-9%.]+/g, "");
+    .replace(/[^a-z0-9%]+/g, "");
 }
 
 /**
@@ -74,7 +74,18 @@ const FATURAMENTO_ALIASES: Record<string, string[]> = {
   peso: ["Peso"],
   lista: ["Lista"],
   ocorr: ["Ocorr", "Ocorrência", "Ocorrencia", "Ocorr."],
-  pre_base: ["Pre Base", "Pré Base", "Preço Base", "Preco Base", "Pre_Base", "Pré-Base"],
+  pre_base: [
+    "Pre Base",
+    "Pré Base",
+    "Preço Base",
+    "Preco Base",
+    "Pre_Base",
+    "Pré-Base",
+    "Pre. Base",
+    "P. Base",
+    "Vl Base",
+    "Valor Base",
+  ],
   preco_praticado: ["Preço Praticado", "Preco Praticado", "Preço Pratic.", "Preco Pratic"],
   valor_produto: ["Valor Produto", "Valor do Produto"],
   desconto_comercial: [
@@ -95,6 +106,11 @@ const FATURAMENTO_ALIASES: Record<string, string[]> = {
     "Desconto Financeiro",
     "%Desc Finan",
     "%Desconto Financeiro",
+    "% Desc Finan",
+    "Desc.Finan",
+    "Desc Finan.",
+    "%Desc.Finan",
+    "%Desc. Finan",
   ],
   nota_refaturada: ["Nota Refaturada", "Nota_Refaturada"],
   romaneio_refaturada: ["Romaneio Refaturada", "Romaneio_Refaturada"],
@@ -186,7 +202,7 @@ export function mapRowsToDbColumnOrder(params: {
   sheetHeaders: string[];
   sheetRows: string[][];
   dbColumns: MysqlColMeta[];
-}): { headers: string[]; rows: string[][] } {
+}): { headers: string[]; rows: string[][]; missingColumns: string[] } {
   const { sheetHeaders, sheetRows, dbColumns } = params;
   const deduped = dedupeHeadersPandasStyle(sheetHeaders);
 
@@ -196,6 +212,7 @@ export function mapRowsToDbColumnOrder(params: {
     if (key && !sheetByKey.has(key)) sheetByKey.set(key, i);
   }
 
+  // Colunas do MySQL sem par na planilha → string vazia (não bloqueia o import).
   const missing: string[] = [];
   const indices = dbColumns.map((col) => {
     const idx = resolveSheetIndex(col.name, sheetByKey);
@@ -207,21 +224,19 @@ export function mapRowsToDbColumnOrder(params: {
   });
 
   if (missing.length > 0) {
-    const seen = [...sheetByKey.keys()].slice(0, 12).join(", ");
-    throw new Error(
-      `Colunas da planilha não casam com o MySQL (${missing.length} faltando). ` +
-        `Exemplos: ${missing.slice(0, 5).join(", ")}. ` +
-        `Cabeçalhos lidos (amostra): ${seen}`,
+    console.warn(
+      `[columnMap] ${missing.length} col(s) MySQL sem par na planilha → vazias: ${missing.join(", ")}`,
     );
   }
 
   const rows = sheetRows.map((row) =>
-    indices.map((i) => String(row[i] ?? "").trim()),
+    indices.map((i) => (i < 0 ? "" : String(row[i] ?? "").trim())),
   );
 
   return {
     headers: dbColumns.map((c) => c.name),
     rows,
+    missingColumns: missing,
   };
 }
 

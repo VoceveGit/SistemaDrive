@@ -102,6 +102,10 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
   }
 
   const ignoredRows = parsed.ignoredResumo + parsed.ignoredNoNumero;
+  const missingNote =
+    parsed.missingColumns.length > 0
+      ? ` Colunas MySQL sem par na planilha (vão vazias): ${parsed.missingColumns.join(", ")}.`
+      : "";
 
   const summary: FaturamentoSummary = {
     mode: "faturamento",
@@ -118,7 +122,8 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
     insertedRowCount: numerosNovos,
     note:
       `Pronto p/ enviar: ${rowsToInsert.length} nota(s) no staging ` +
-      `(${numerosExistentes} já no banco). ${ignoredRows} ignorada(s).`,
+      `(${numerosExistentes} já no banco). ${ignoredRows} ignorada(s).` +
+      missingNote,
   };
 
   return {
