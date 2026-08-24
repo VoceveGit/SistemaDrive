@@ -29,6 +29,9 @@ export type PedidosSummary = {
   pedidosUnchanged: number;
   rowsToInsert: number;
   insertedRowCount: number;
+  /** Janela DELETE: Dt.Entrega >= monthFrom AND Dt.Entrega < monthToExclusive */
+  monthFrom?: string;
+  monthToExclusive?: string;
   note: string;
 };
 

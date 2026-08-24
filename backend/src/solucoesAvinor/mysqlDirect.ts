@@ -77,57 +77,23 @@ export async function fetchExistingNumeros(
   }
 }
 
-export async function fetchPedidoRowsInRange(params: {
+/**
+ * Igual upload_avinor: DELETE WHERE data >= from AND data < toExclusive
+ * (janela de meses coberta pela planilha).
+ */
+export async function deleteByDateWindow(params: {
   settings: DbSettings;
   table: string;
-  pedidoCol: string;
   dtCol: string;
-  pedidoIds: string[];
   dateFrom: string;
-  dateTo: string;
-  columnNames: string[];
-}): Promise<RowDataPacket[]> {
-  const { settings, table, pedidoCol, dtCol, pedidoIds, dateFrom, dateTo, columnNames } =
-    params;
-  const out: RowDataPacket[] = [];
-  if (!pedidoIds.length) return out;
-
-  const colsSql = columnNames.map((c) => qIdent(c)).join(", ");
-  const conn = await openConn(settings);
-  try {
-    const chunk = 200;
-    for (let i = 0; i < pedidoIds.length; i += chunk) {
-      const slice = pedidoIds.slice(i, i + chunk);
-      const placeholders = slice.map(() => "?").join(",");
-      const [rows] = await conn.query<RowDataPacket[]>(
-        `SELECT ${colsSql} FROM ${qIdent(table)}
-         WHERE ${qIdent(pedidoCol)} IN (${placeholders})
-           AND ${qIdent(dtCol)} >= ? AND ${qIdent(dtCol)} <= ?`,
-        [...slice, dateFrom, dateTo],
-      );
-      out.push(...rows);
-    }
-    return out;
-  } finally {
-    await conn.end();
-  }
-}
-
-export async function deletePedidoRowsInRange(params: {
-  settings: DbSettings;
-  table: string;
-  pedidoCol: string;
-  dtCol: string;
-  pedidoId: string;
-  dateFrom: string;
-  dateTo: string;
+  dateToExclusive: string;
 }): Promise<number> {
-  const { settings, table, pedidoCol, dtCol, pedidoId, dateFrom, dateTo } = params;
+  const { settings, table, dtCol, dateFrom, dateToExclusive } = params;
   const conn = await openConn(settings);
   try {
     const [result] = await conn.query(
-      `DELETE FROM ${qIdent(table)} WHERE ${qIdent(pedidoCol)} = ? AND ${qIdent(dtCol)} >= ? AND ${qIdent(dtCol)} <= ?`,
-      [pedidoId, dateFrom, dateTo],
+      `DELETE FROM ${qIdent(table)} WHERE ${qIdent(dtCol)} >= ? AND ${qIdent(dtCol)} < ?`,
+      [dateFrom, dateToExclusive],
     );
     return Number((result as { affectedRows?: number }).affectedRows ?? 0);
   } finally {

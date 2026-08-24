@@ -1,4 +1,5 @@
 // backend/src/solucoesAvinor/avinorPedidos.ts
+// Sync igual upload_avinor: apaga janela de meses (Dt.Entrega) + insert total.
 
 import type {
   CodedSolution,
@@ -8,21 +9,8 @@ import type {
   PedidosSummary,
 } from "./types.js";
 import { listMysqlColumnsOrdered } from "./snapshotMysql.js";
-import {
-  deletePedidoRowsInRange,
-  fetchPedidoRowsInRange,
-  insertBatchDirect,
-} from "./mysqlDirect.js";
-import {
-  comparePedidoGroups,
-  groupRowsByPedido,
-  normalizeDbRowForHash,
-  normalizeSheetRowForHash,
-  parsePedidosSpreadsheet,
-  pedidosDateRange,
-  PEDIDO_COL_IDX,
-  DT_ENTREGA_COL_IDX,
-} from "./parsePedidos.js";
+import { deleteByDateWindow, insertBatchDirect } from "./mysqlDirect.js";
+import { parsePedidosSpreadsheet } from "./parsePedidos.js";
 
 const MAX_PREVIEW_ROWS = 4000;
 const BATCH = 400;
@@ -37,9 +25,7 @@ async function loadColumns(ctx: CodedSolutionContext) {
   if (columns.length !== 23) {
     throw new Error(`Tabela ${targetTable} tem ${columns.length} colunas; esperado 23.`);
   }
-  const pedidoCol = columns[PEDIDO_COL_IDX].name;
-  const dtCol = columns[DT_ENTREGA_COL_IDX].name;
-  return { targetTable, columns, pedidoCol, dtCol };
+  return { targetTable, columns };
 }
 
 async function analyzePedidos(
@@ -50,94 +36,47 @@ async function analyzePedidos(
   validRows: string[][];
   previewRows: string[][];
   summary: PedidosSummary;
-  changedPedidos: string[];
-  fileGroups: Map<string, string[][]>;
-  dateRange: { from: string; to: string };
-  columns: Awaited<ReturnType<typeof loadColumns>>["columns"];
-  targetTable: string;
-  pedidoCol: string;
-  dtCol: string;
 }> {
-  const { targetTable, columns, pedidoCol, dtCol } = await loadColumns(ctx);
+  const { targetTable, columns } = await loadColumns(ctx);
 
   const parsed = await parsePedidosSpreadsheet({
     drive: ctx.drive,
     file: ctx.file,
-    columnCount: columns.length,
+    dbColumns: columns,
     headerRow: AVINOR_PEDIDOS.headerRow,
     dataRow: AVINOR_PEDIDOS.dataRow,
     onProgress: ctx.onProgress,
   });
 
-  const fileGroups = groupRowsByPedido(parsed.validRows);
-  const fileGroupsNorm = new Map<string, string[][]>();
-  for (const [pedido, rows] of fileGroups) {
-    fileGroupsNorm.set(
-      pedido,
-      rows.map((r) => normalizeSheetRowForHash(r, columns)),
-    );
-  }
-
-  const dateRange = pedidosDateRange(parsed.validRows);
-  const pedidoIds = [...fileGroups.keys()];
-
-  await ctx.onProgress?.("Comparando pedidos com o banco...");
-  const dbRaw = await fetchPedidoRowsInRange({
-    settings: ctx.dbSettings,
-    table: targetTable,
-    pedidoCol,
-    dtCol,
-    pedidoIds,
-    dateFrom: dateRange.from,
-    dateTo: dateRange.to,
-    columnNames: columns.map((c) => c.name),
-  });
-
-  const dbGroups = new Map<string, string[][]>();
-  for (const r of dbRaw) {
-    const pedido = String(r[pedidoCol] ?? "").trim();
-    if (!pedido) continue;
-    const norm = normalizeDbRowForHash(r as Record<string, unknown>, columns);
-    const list = dbGroups.get(pedido) ?? [];
-    list.push(norm);
-    dbGroups.set(pedido, list);
-  }
-
-  const { changed, unchanged } = comparePedidoGroups({
-    fileGroups: fileGroupsNorm,
-    dbGroups,
-  });
-  const rowsToInsert = changed.reduce((acc, p) => {
-    return acc + (fileGroups.get(p)?.length ?? 0);
-  }, 0);
+  const dtCol = columns[parsed.dtColIdx]?.name ?? "Dt.Entrega";
+  const rowsToInsert = parsed.validRows.length;
 
   let insertedRowCount = 0;
+  let deletedRows = 0;
+
   if (forCommit) {
-    await ctx.onProgress?.(`Gravando ${changed.length} pedido(s) alterados...`);
-    for (const pedidoId of changed) {
-      const rows = fileGroups.get(pedidoId) ?? [];
-      if (!rows.length) continue;
-      await deletePedidoRowsInRange({
+    await ctx.onProgress?.(
+      `Apagando janela ${parsed.monthFrom} ≤ Dt.Entrega < ${parsed.monthToExclusive}...`,
+    );
+    deletedRows = await deleteByDateWindow({
+      settings: ctx.dbSettings,
+      table: targetTable,
+      dtCol,
+      dateFrom: parsed.monthFrom,
+      dateToExclusive: parsed.monthToExclusive,
+    });
+
+    await ctx.onProgress?.(`Inserindo ${rowsToInsert} linha(s)...`);
+    for (let i = 0; i < parsed.validRows.length; i += BATCH) {
+      insertedRowCount += await insertBatchDirect({
         settings: ctx.dbSettings,
         table: targetTable,
-        pedidoCol,
-        dtCol,
-        pedidoId,
-        dateFrom: dateRange.from,
-        dateTo: dateRange.to,
+        columns,
+        sheetRows: parsed.validRows.slice(i, i + BATCH),
       });
-      for (let i = 0; i < rows.length; i += BATCH) {
-        insertedRowCount += await insertBatchDirect({
-          settings: ctx.dbSettings,
-          table: targetTable,
-          columns,
-          sheetRows: rows.slice(i, i + BATCH),
-        });
-      }
     }
   }
 
-  const truncated = parsed.validRows.length > MAX_PREVIEW_ROWS;
   const previewRows = parsed.validRows.slice(0, MAX_PREVIEW_ROWS);
 
   const summary: PedidosSummary = {
@@ -149,14 +88,17 @@ async function analyzePedidos(
     validRows: parsed.validRows.length,
     ignoredRows: parsed.ignoredTotal,
     ignoredTotal: parsed.ignoredTotal,
-    pedidosInFile: fileGroups.size,
-    pedidosChanged: changed.length,
-    pedidosUnchanged: unchanged.length,
+    pedidosInFile: parsed.pedidosInFile,
+    // Janela inteira: tudo será reescrito (sem comparação pedido a pedido)
+    pedidosChanged: parsed.pedidosInFile,
+    pedidosUnchanged: 0,
     rowsToInsert,
     insertedRowCount: forCommit ? insertedRowCount : rowsToInsert,
+    monthFrom: parsed.monthFrom,
+    monthToExclusive: parsed.monthToExclusive,
     note: forCommit
-      ? `Pedidos OK: ${changed.length} pedido(s) atualizados, ${insertedRowCount} linha(s) inseridas. ${unchanged.length} pedido(s) iguais (ignorados).`
-      : `Preview: ${parsed.validRows.length} linha(s) válidas, ${fileGroups.size} pedido(s). ${changed.length} pedido(s) com diferença, ${unchanged.length} iguais. ${parsed.ignoredTotal} ignorada(s) (TOTAL).`,
+      ? `Pedidos OK: janela ${parsed.monthFrom} → ${parsed.monthToExclusive} (apagou ${deletedRows}, inseriu ${insertedRowCount}). ${parsed.pedidosInFile} pedido(s), ${parsed.ignoredTotal} linha(s) ignorada(s).`
+      : `Preview: ${parsed.validRows.length} linha(s), ${parsed.pedidosInFile} pedido(s). Janela ${parsed.monthFrom} ≤ Dt.Entrega < ${parsed.monthToExclusive}. Enviar apaga a janela e reinsere tudo. ${parsed.ignoredTotal} ignorada(s) (TOTAL/vazio).`,
   };
 
   return {
@@ -164,13 +106,6 @@ async function analyzePedidos(
     validRows: parsed.validRows,
     previewRows,
     summary,
-    changedPedidos: changed,
-    fileGroups,
-    dateRange,
-    columns,
-    targetTable,
-    pedidoCol,
-    dtCol,
   };
 }
 
@@ -193,7 +128,7 @@ export const AVINOR_PEDIDOS: CodedSolution = {
   id: "avinor_pedidos",
   label: "Pedidos Avinor",
   description:
-    "Linha 7 = títulos, dados L8+. Fill-down Emp→Vendedor. Ignora TOTAL na Descrição. Sync por Pedido (Dt.Entrega).",
+    "Linha 7 = títulos. Por nome (pandas). Fill-down em todas as cols após filtrar TOTAL. Apaga janela de meses (Dt.Entrega) e reinsere.",
   defaultTargetTable: "base_pedidos_avinor",
   headerRow: 7,
   dataRow: 8,

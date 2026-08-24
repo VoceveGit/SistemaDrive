@@ -375,21 +375,20 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
                 <strong>{formatNumber(codedSummary.pedidosInFile ?? 0)}</strong>
               </li>
               <li>
-                Pedidos com diferença:{" "}
-                <strong className="text-accent-green">
-                  {formatNumber(codedSummary.pedidosChanged ?? 0)}
-                </strong>
-              </li>
-              <li>
-                Pedidos iguais (skip):{" "}
-                <strong>{formatNumber(codedSummary.pedidosUnchanged ?? 0)}</strong>
-              </li>
-              <li>
                 Linhas a inserir:{" "}
                 <strong className="text-accent-green">
                   {formatNumber(codedSummary.rowsToInsert ?? 0)}
                 </strong>
               </li>
+              {(codedSummary.monthFrom || codedSummary.monthToExclusive) && (
+                <li className="sm:col-span-2">
+                  Janela (apaga e reinsere):{" "}
+                  <strong className="font-mono text-text-primary">
+                    {codedSummary.monthFrom} ≤ Dt.Entrega &lt;{" "}
+                    {codedSummary.monthToExclusive}
+                  </strong>
+                </li>
+              )}
             </>
           )}
           {codedSummary.mode === "faturamento" && (

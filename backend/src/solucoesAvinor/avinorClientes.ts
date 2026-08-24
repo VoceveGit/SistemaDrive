@@ -1,7 +1,6 @@
 // backend/src/solucoesAvinor/avinorClientes.ts
-// Snapshot posicional → base_clientes_avinor (espelho + DELETE/INSERT em transação).
+// Snapshot por nome (pandas dedup) → base_clientes_avinor (espelho + transação).
 
-import { sanitizeExcelText } from "../services/sheetParseService.js";
 import {
   downloadDriveFileToTemp,
   safeUnlink,
@@ -20,8 +19,15 @@ import {
   prepareMirrorTable,
   truncateMirror,
 } from "./snapshotMysql.js";
+import {
+  dedupeHeadersPandasStyle,
+  mapRowsToDbColumnOrder,
+} from "./columnMap.js";
+import { padRow } from "./rowFilters.js";
 
-/** Títulos esperados na linha 4 (ordem = colunas do MySQL). */
+const BATCH = 400;
+
+/** Lista de referência (script antigo) — validação leve após dedup. */
 export const AVINOR_CLIENTES_HEADERS = [
   "Emp",
   "Unidades",
@@ -37,7 +43,7 @@ export const AVINOR_CLIENTES_HEADERS = [
   "CEP",
   "Pt. Referênci",
   "Telefone",
-  "Telefone",
+  "Telefone.1",
   "Pessoa",
   "CPF/CGC",
   "Limite Crédito",
@@ -54,16 +60,16 @@ export const AVINOR_CLIENTES_HEADERS = [
   "Nome",
   "Email",
   "Rede",
-  "Nome",
+  "Nome.1",
   "%Desconto Comercial",
   "%Desconto Financeiro",
   "Clas. ABC",
   "Ramo Atividade",
   "Tp.Cliente",
   "Supervisor",
-  "Nome",
+  "Nome.2",
   "Lista",
-  "Nome",
+  "Nome.3",
   "Ocorrência",
   "Descrição",
   "EAN Cliente",
@@ -71,55 +77,6 @@ export const AVINOR_CLIENTES_HEADERS = [
   "Nr dias entrega",
   "Ult Pedido",
 ] as const;
-
-const BATCH = 400;
-
-function norm(h: string): string {
-  return sanitizeExcelText(h)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9%]+/g, "")
-    .trim();
-}
-
-function assertHeaders(actual: string[]): void {
-  if (actual.length < AVINOR_CLIENTES_HEADERS.length) {
-    throw new Error(
-      `Cabeçalho: esperava ${AVINOR_CLIENTES_HEADERS.length} colunas, veio ${actual.length}. ` +
-        `Confirme que a linha 4 tem os títulos.`,
-    );
-  }
-  const bad: string[] = [];
-  for (let i = 0; i < AVINOR_CLIENTES_HEADERS.length; i++) {
-    const exp = norm(AVINOR_CLIENTES_HEADERS[i]);
-    const got = norm(actual[i] ?? "");
-    if (!got) {
-      bad.push(`#${i + 1} vazio (esperado ${AVINOR_CLIENTES_HEADERS[i]})`);
-      continue;
-    }
-    if (
-      exp &&
-      got &&
-      exp.slice(0, 4) !== got.slice(0, 4) &&
-      !got.includes(exp.slice(0, 5))
-    ) {
-      bad.push(`#${i + 1} "${actual[i]}" ≠ "${AVINOR_CLIENTES_HEADERS[i]}"`);
-    }
-  }
-  if (bad.length > 8) {
-    throw new Error(
-      `Cabeçalho não confere com Avinor Clientes (${bad.length} divergências). ` +
-        `Nada foi gravado. Exemplos: ${bad.slice(0, 4).join("; ")}`,
-    );
-  }
-}
-
-function padRow(row: string[], len: number): string[] {
-  const out = row.slice(0, len);
-  while (out.length < len) out.push("");
-  return out;
-}
 
 async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
   const targetTable =
@@ -146,12 +103,13 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
   let tmpPath: string | null = null;
   let insertedRowCount = 0;
   let headers: string[] = [];
+  let sheetHeaders: string[] = [];
 
   try {
     await ctx.onProgress?.("Avinor Clientes: baixando arquivo...");
     tmpPath = await downloadDriveFileToTemp(ctx.drive, ctx.file);
 
-    await ctx.onProgress?.("Avinor Clientes: streaming → espelho...");
+    await ctx.onProgress?.("Avinor Clientes: streaming → espelho (por nome)...");
     const streamed = await streamSheetFileInBatches(
       tmpPath,
       {
@@ -163,17 +121,28 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
       BATCH,
       {
         onHeaders: async (h) => {
-          headers = h.slice(0, columns.length);
-          assertHeaders(headers);
-          await ctx.onProgress?.(`Cabeçalho OK (${headers.length} cols)`);
+          sheetHeaders = dedupeHeadersPandasStyle(h);
+          // Valida casando com MySQL (lança se faltar coluna)
+          mapRowsToDbColumnOrder({
+            sheetHeaders,
+            sheetRows: [],
+            dbColumns: columns,
+          });
+          headers = columns.map((c) => c.name);
+          await ctx.onProgress?.(`Cabeçalho OK (${sheetHeaders.length} cols, map por nome)`);
         },
         onBatch: async (batch) => {
-          const rows = batch.map((r) => padRow(r, columns.length));
+          const padded = batch.map((r) => padRow(r, sheetHeaders.length));
+          const mapped = mapRowsToDbColumnOrder({
+            sheetHeaders,
+            sheetRows: padded,
+            dbColumns: columns,
+          });
           insertedRowCount += await insertBatchIntoMirror({
             settings: ctx.dbSettings,
             mirrorTable,
             columns,
-            sheetRows: rows,
+            sheetRows: mapped.rows,
           });
         },
         onProgress: async (n) => {
@@ -183,8 +152,13 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
     );
 
     if (!headers.length) {
-      headers = streamed.headers.slice(0, columns.length);
-      assertHeaders(headers);
+      sheetHeaders = dedupeHeadersPandasStyle(streamed.headers);
+      mapRowsToDbColumnOrder({
+        sheetHeaders,
+        sheetRows: [],
+        dbColumns: columns,
+      });
+      headers = columns.map((c) => c.name);
     }
 
     if (insertedRowCount === 0) {
@@ -230,7 +204,7 @@ export const AVINOR_CLIENTES: CodedSolution = {
   id: "avinor_clientes",
   label: "Clientes Avinor",
   description:
-    "Snapshot 47 colunas por posição. Linha 4 = títulos, dados na 5+. Substitui base_clientes_avinor com espelho + transação.",
+    "Snapshot por nome (dedup pandas). Linha 4 = títulos, dados na 5+. Espelho + transação (sem DROP).",
   defaultTargetTable: "base_clientes_avinor",
   headerRow: 4,
   dataRow: 5,

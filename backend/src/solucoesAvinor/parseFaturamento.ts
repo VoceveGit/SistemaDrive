@@ -1,4 +1,4 @@
-// backend/src/solucoesAvinor/parseFaturamento.ts — leitura faturamento Avinor
+// backend/src/solucoesAvinor/parseFaturamento.ts — leitura faturamento Avinor (por nome)
 
 import {
   downloadDriveFileToTemp,
@@ -6,14 +6,18 @@ import {
   streamSheetFileInBatches,
 } from "../services/streamSheetService.js";
 import type { drive_v3 } from "googleapis";
+import type { MysqlColMeta } from "./conversoes.js";
+import {
+  dedupeHeadersPandasStyle,
+  findColumnIndex,
+  mapRowsToDbColumnOrder,
+} from "./columnMap.js";
 import {
   isFaturamentoFooterStopRow,
   isFaturamentoSkipRow,
   isValidFaturamentoNumero,
   padRow,
 } from "./rowFilters.js";
-
-export const NUMERO_COL_IDX = 8;
 
 const BATCH = 400;
 
@@ -24,24 +28,26 @@ export type FaturamentoParseResult = {
   ignoredResumo: number;
   ignoredNoNumero: number;
   stoppedAtFooter: boolean;
+  numeroColIdx: number;
 };
 
 export async function parseFaturamentoSpreadsheet(params: {
   drive: drive_v3.Drive;
   file: drive_v3.Schema$File;
-  columnCount: number;
+  dbColumns: MysqlColMeta[];
   headerRow: number;
   dataRow: number;
   onProgress?: (msg: string, n?: number) => Promise<void>;
 }): Promise<FaturamentoParseResult> {
-  const { drive, file, columnCount, headerRow, dataRow, onProgress } = params;
+  const { drive, file, dbColumns, headerRow, dataRow, onProgress } = params;
   let tmpPath: string | null = null;
-  const validRows: string[][] = [];
-  let headers: string[] = [];
+  const rawValid: string[][] = [];
+  let sheetHeaders: string[] = [];
   let linesRead = 0;
   let ignoredResumo = 0;
   let ignoredNoNumero = 0;
   let stoppedAtFooter = false;
+  let numeroIdxSheet = -1;
 
   try {
     tmpPath = await downloadDriveFileToTemp(drive, file);
@@ -58,26 +64,30 @@ export async function parseFaturamentoSpreadsheet(params: {
       BATCH,
       {
         onHeaders: async (h) => {
-          headers = h.slice(0, columnCount);
+          sheetHeaders = dedupeHeadersPandasStyle(h);
+          numeroIdxSheet = findColumnIndex(sheetHeaders, "numero", "Número", "Numero");
+          if (numeroIdxSheet < 0) {
+            throw new Error('Coluna "numero" não encontrada no cabeçalho (linha 18).');
+          }
         },
         onBatch: async (batch) => {
           for (const raw of batch) {
             linesRead += 1;
-            const row = padRow(raw, columnCount);
+            const row = padRow(raw, sheetHeaders.length || raw.length);
 
             if (isFaturamentoFooterStopRow(row)) {
               stoppedAtFooter = true;
               return;
             }
 
-            if (isFaturamentoSkipRow(row, NUMERO_COL_IDX)) {
-              const numero = String(row[NUMERO_COL_IDX] ?? "").trim();
+            if (isFaturamentoSkipRow(row, numeroIdxSheet)) {
+              const numero = String(row[numeroIdxSheet] ?? "").trim();
               if (!isValidFaturamentoNumero(numero)) ignoredNoNumero += 1;
               else ignoredResumo += 1;
               continue;
             }
 
-            validRows.push(row);
+            rawValid.push(row);
           }
         },
         shouldStop: (rowVals) => {
@@ -93,30 +103,42 @@ export async function parseFaturamentoSpreadsheet(params: {
       },
     );
 
-    if (!headers.length) {
+    if (!sheetHeaders.length) {
       throw new Error("Cabeçalho não encontrado — confira linha 18 (títulos).");
     }
-    if (validRows.length === 0) {
+    if (rawValid.length === 0) {
       throw new Error("Nenhuma linha válida (sem numero / só resumos).");
     }
 
+    const mapped = mapRowsToDbColumnOrder({
+      sheetHeaders,
+      sheetRows: rawValid,
+      dbColumns,
+    });
+
+    const numeroColIdx = findColumnIndex(mapped.headers, "numero", "Número", "Numero");
+    if (numeroColIdx < 0) {
+      throw new Error('Coluna "numero" não encontrada na tabela MySQL.');
+    }
+
     return {
-      headers,
-      validRows,
+      headers: mapped.headers,
+      validRows: mapped.rows,
       linesRead,
       ignoredResumo,
       ignoredNoNumero,
       stoppedAtFooter,
+      numeroColIdx,
     };
   } finally {
     await safeUnlink(tmpPath);
   }
 }
 
-export function extractNumeros(rows: string[][]): string[] {
+export function extractNumeros(rows: string[][], numeroColIdx: number): string[] {
   const set = new Set<string>();
   for (const row of rows) {
-    const n = String(row[NUMERO_COL_IDX] ?? "").trim();
+    const n = String(row[numeroColIdx] ?? "").trim();
     if (n) set.add(n);
   }
   return [...set];

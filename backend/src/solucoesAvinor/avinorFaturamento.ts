@@ -9,11 +9,7 @@ import type {
 } from "./types.js";
 import { listMysqlColumnsOrdered } from "./snapshotMysql.js";
 import { fetchExistingNumeros, insertBatchDirect } from "./mysqlDirect.js";
-import {
-  extractNumeros,
-  NUMERO_COL_IDX,
-  parseFaturamentoSpreadsheet,
-} from "./parseFaturamento.js";
+import { extractNumeros, parseFaturamentoSpreadsheet } from "./parseFaturamento.js";
 import { isValidFaturamentoNumero } from "./rowFilters.js";
 
 const MAX_PREVIEW_ROWS = 4000;
@@ -29,8 +25,7 @@ async function loadColumns(ctx: CodedSolutionContext) {
   if (columns.length !== 44) {
     throw new Error(`Tabela ${targetTable} tem ${columns.length} colunas; esperado 44.`);
   }
-  const numeroCol = columns[NUMERO_COL_IDX].name;
-  return { targetTable, columns, numeroCol };
+  return { targetTable, columns };
 }
 
 async function analyzeFaturamento(
@@ -43,18 +38,20 @@ async function analyzeFaturamento(
   summary: FaturamentoSummary;
   rowsToInsert: string[][];
 }> {
-  const { targetTable, columns, numeroCol } = await loadColumns(ctx);
+  const { targetTable, columns } = await loadColumns(ctx);
 
   const parsed = await parseFaturamentoSpreadsheet({
     drive: ctx.drive,
     file: ctx.file,
-    columnCount: columns.length,
+    dbColumns: columns,
     headerRow: AVINOR_FATURAMENTO.headerRow,
     dataRow: AVINOR_FATURAMENTO.dataRow,
     onProgress: ctx.onProgress,
   });
 
-  const numeros = extractNumeros(parsed.validRows);
+  const numeroCol = columns[parsed.numeroColIdx]?.name ?? "numero";
+  const numeros = extractNumeros(parsed.validRows, parsed.numeroColIdx);
+
   await ctx.onProgress?.("Verificando números no banco...");
   const existing = await fetchExistingNumeros(
     ctx.dbSettings,
@@ -69,7 +66,7 @@ async function analyzeFaturamento(
   const seenNumero = new Set<string>();
 
   for (const row of parsed.validRows) {
-    const numero = String(row[NUMERO_COL_IDX] ?? "").trim();
+    const numero = String(row[parsed.numeroColIdx] ?? "").trim();
     if (!isValidFaturamentoNumero(numero)) continue;
     if (seenNumero.has(numero)) continue;
     seenNumero.add(numero);
@@ -143,7 +140,7 @@ export const AVINOR_FATURAMENTO: CodedSolution = {
   id: "avinor_faturamento",
   label: "Faturamento Avinor",
   description:
-    "Linha 18 = títulos, dados L19+. Ignora L1–6, CFOP e rodapés por texto. Insert se numero não existe.",
+    "Por nome. Linha 18 = títulos. Ignora rodapés por texto. Insert se numero não existe.",
   defaultTargetTable: "faturamento_avinor",
   headerRow: 18,
   dataRow: 19,

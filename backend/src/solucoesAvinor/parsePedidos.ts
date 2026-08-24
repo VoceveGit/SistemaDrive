@@ -1,43 +1,95 @@
-// backend/src/solucoesAvinor/parsePedidos.ts — leitura + agrupamento pedidos Avinor
+// backend/src/solucoesAvinor/parsePedidos.ts
+// Pedidos Avinor: filtro TOTAL → ffill todas cols → map por nome.
+// Janela de mês = min/max Dt.Entrega (igual upload_avinor).
 
+import type { drive_v3 } from "googleapis";
 import {
   downloadDriveFileToTemp,
   safeUnlink,
   streamSheetFileInBatches,
 } from "../services/streamSheetService.js";
-import type { drive_v3 } from "googleapis";
-import { hashRow } from "../utils/hash.js";
-import { parseDateTimeCell, convertCellForMysql, type MysqlColMeta } from "./conversoes.js";
-import { isPedidosSkipRow, padRow } from "./rowFilters.js";
-
-export const PEDIDO_COL_IDX = 3;
-export const DT_ENTREGA_COL_IDX = 2;
-export const DESCRICAO_COL_IDX = 12;
-export const PEDIDOS_AUTOFILL_COLS = 10;
+import { parseDateTimeCell } from "./conversoes.js";
+import {
+  dedupeHeadersPandasStyle,
+  findColumnIndex,
+  ffillAllColumns,
+  mapRowsToDbColumnOrder,
+} from "./columnMap.js";
+import type { MysqlColMeta } from "./conversoes.js";
+import { padRow } from "./rowFilters.js";
 
 const BATCH = 400;
+/** Igual skipfooter=3 do pandas no script antigo. */
+const SKIP_FOOTER_ROWS = 3;
 
 export type PedidosParseResult = {
+  /** Headers na ordem do MySQL */
   headers: string[];
+  /** Linhas já mapeadas na ordem do MySQL */
   validRows: string[][];
   linesRead: number;
   ignoredTotal: number;
+  dtColIdx: number;
+  pedidoColIdx: number;
+  monthFrom: string;
+  monthToExclusive: string;
+  pedidosInFile: number;
 };
+
+function isTotalDescricao(desc: string): boolean {
+  return String(desc ?? "")
+    .trim()
+    .toUpperCase()
+    .startsWith("TOTAL");
+}
+
+function isEmptyDesc(desc: string): boolean {
+  return String(desc ?? "").trim() === "";
+}
+
+/**
+ * Janela do script antigo:
+ * from = 1º dia do mês da data mais antiga
+ * toExclusive = 1º dia do mês seguinte à data mais recente
+ */
+export function pedidosMonthWindowFromDates(dates: Date[]): {
+  from: string;
+  toExclusive: string;
+} {
+  if (!dates.length) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const from = `${y}-${String(m + 1).padStart(2, "0")}-01`;
+    const next = new Date(y, m + 1, 1);
+    const toExclusive = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
+    return { from, toExclusive };
+  }
+  let min = dates[0]!;
+  let max = dates[0]!;
+  for (const d of dates) {
+    if (d < min) min = d;
+    if (d > max) max = d;
+  }
+  const from = `${min.getFullYear()}-${String(min.getMonth() + 1).padStart(2, "0")}-01`;
+  const next = new Date(max.getFullYear(), max.getMonth() + 1, 1);
+  const toExclusive = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
+  return { from, toExclusive };
+}
 
 export async function parsePedidosSpreadsheet(params: {
   drive: drive_v3.Drive;
   file: drive_v3.Schema$File;
-  columnCount: number;
+  dbColumns: MysqlColMeta[];
   headerRow: number;
   dataRow: number;
   onProgress?: (msg: string, n?: number) => Promise<void>;
 }): Promise<PedidosParseResult> {
-  const { drive, file, columnCount, headerRow, dataRow, onProgress } = params;
+  const { drive, file, dbColumns, headerRow, dataRow, onProgress } = params;
   let tmpPath: string | null = null;
-  const validRows: string[][] = [];
-  let headers: string[] = [];
+  const rawRows: string[][] = [];
+  let sheetHeaders: string[] = [];
   let linesRead = 0;
-  let ignoredTotal = 0;
 
   try {
     tmpPath = await downloadDriveFileToTemp(drive, file);
@@ -49,28 +101,17 @@ export async function parsePedidosSpreadsheet(params: {
         headerRow,
         dataRow,
         skipEmptyRows: true,
-        autofillEmpty: true,
-        autofillColumns: PEDIDOS_AUTOFILL_COLS,
+        autofillEmpty: false,
       },
       BATCH,
       {
         onHeaders: async (h) => {
-          headers = h.slice(0, columnCount);
+          sheetHeaders = dedupeHeadersPandasStyle(h);
         },
         onBatch: async (batch) => {
           for (const raw of batch) {
             linesRead += 1;
-            const row = padRow(raw, columnCount);
-            if (isPedidosSkipRow(row, DESCRICAO_COL_IDX)) {
-              ignoredTotal += 1;
-              continue;
-            }
-            const pedido = String(row[PEDIDO_COL_IDX] ?? "").trim();
-            if (!pedido) {
-              ignoredTotal += 1;
-              continue;
-            }
-            validRows.push(row);
+            rawRows.push(padRow(raw, sheetHeaders.length || raw.length));
           }
         },
         onProgress: async (n) => {
@@ -79,108 +120,94 @@ export async function parsePedidosSpreadsheet(params: {
       },
     );
 
-    if (!headers.length) {
+    if (!sheetHeaders.length) {
       throw new Error("Cabeçalho não encontrado — confira linha 7 (títulos).");
     }
-    if (validRows.length === 0) {
-      throw new Error("Nenhuma linha válida após filtros (TOTAL / sem Pedido).");
+
+    // skipfooter=3 (script antigo)
+    const withoutFooter =
+      rawRows.length > SKIP_FOOTER_ROWS
+        ? rawRows.slice(0, rawRows.length - SKIP_FOOTER_ROWS)
+        : rawRows;
+
+    const descIdx = findColumnIndex(sheetHeaders, "Descrição", "Descricao");
+    const pedidoIdxSheet = findColumnIndex(sheetHeaders, "Pedido");
+    const dtIdxSheet = findColumnIndex(sheetHeaders, "Dt.Entrega", "Dt Entrega");
+
+    if (descIdx < 0) {
+      throw new Error('Coluna "Descrição" não encontrada no cabeçalho.');
+    }
+    if (pedidoIdxSheet < 0) {
+      throw new Error('Coluna "Pedido" não encontrada no cabeçalho.');
+    }
+    if (dtIdxSheet < 0) {
+      throw new Error('Coluna "Dt.Entrega" não encontrada no cabeçalho.');
     }
 
-    return { headers, validRows, linesRead, ignoredTotal };
+    let ignoredTotal = 0;
+    const filtered: string[][] = [];
+    for (const row of withoutFooter) {
+      const desc = row[descIdx] ?? "";
+      if (isTotalDescricao(desc) || isEmptyDesc(desc)) {
+        ignoredTotal += 1;
+        continue;
+      }
+      filtered.push(row);
+    }
+
+    // fill-down em TODAS as colunas (depois do filtro) — igual .ffill()
+    const filled = ffillAllColumns(filtered);
+
+    // remove linhas sem Pedido após fill
+    const withPedido: string[][] = [];
+    for (const row of filled) {
+      if (!String(row[pedidoIdxSheet] ?? "").trim()) {
+        ignoredTotal += 1;
+        continue;
+      }
+      withPedido.push(row);
+    }
+
+    if (withPedido.length === 0) {
+      throw new Error("Nenhuma linha válida após filtros (TOTAL / Descrição vazia).");
+    }
+
+    const mapped = mapRowsToDbColumnOrder({
+      sheetHeaders,
+      sheetRows: withPedido,
+      dbColumns,
+    });
+
+    const dtColIdx = findColumnIndex(mapped.headers, "Dt.Entrega", "Dt Entrega");
+    const pedidoColIdx = findColumnIndex(mapped.headers, "Pedido");
+    if (dtColIdx < 0 || pedidoColIdx < 0) {
+      throw new Error("Após mapear, Dt.Entrega ou Pedido não encontrados nas cols do MySQL.");
+    }
+
+    const dates: Date[] = [];
+    const pedidos = new Set<string>();
+    for (const row of mapped.rows) {
+      pedidos.add(String(row[pedidoColIdx] ?? "").trim());
+      const dt = parseDateTimeCell(row[dtColIdx] ?? "");
+      if (!dt) continue;
+      const d = new Date(dt.replace(" ", "T"));
+      if (!Number.isNaN(d.getTime())) dates.push(d);
+    }
+
+    const { from, toExclusive } = pedidosMonthWindowFromDates(dates);
+
+    return {
+      headers: mapped.headers,
+      validRows: mapped.rows,
+      linesRead,
+      ignoredTotal,
+      dtColIdx,
+      pedidoColIdx,
+      monthFrom: from,
+      monthToExclusive: toExclusive,
+      pedidosInFile: [...pedidos].filter(Boolean).length,
+    };
   } finally {
     await safeUnlink(tmpPath);
   }
-}
-
-export function groupRowsByPedido(rows: string[][]): Map<string, string[][]> {
-  const map = new Map<string, string[][]>();
-  for (const row of rows) {
-    const pedido = String(row[PEDIDO_COL_IDX] ?? "").trim();
-    if (!pedido) continue;
-    const list = map.get(pedido) ?? [];
-    list.push(row);
-    map.set(pedido, list);
-  }
-  return map;
-}
-
-function formatDateLikeMysql(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-
-export function normalizeSheetRowForHash(row: string[], columns: MysqlColMeta[]): string[] {
-  return columns.map((col, i) => {
-    const v = convertCellForMysql(row[i] ?? "", col);
-    if (v == null) return "";
-    return String(v).trim();
-  });
-}
-
-export function normalizeDbRowForHash(
-  r: Record<string, unknown>,
-  columns: MysqlColMeta[],
-): string[] {
-  return columns.map((col) => {
-    const raw = r[col.name];
-    if (raw == null) return "";
-    if (raw instanceof Date) return formatDateLikeMysql(raw);
-    return String(raw).trim();
-  });
-}
-
-function rowHashNormalized(values: string[]): string {
-  return hashRow(values);
-}
-
-export function hashPedidoGroupNormalized(rows: string[][]): string {
-  const sorted = [...rows].sort((a, b) =>
-    rowHashNormalized(a).localeCompare(rowHashNormalized(b)),
-  );
-  return hashRow(sorted.flat());
-}
-
-export function pedidosDateRange(rows: string[][]): { from: string; to: string } {
-  let minMs = Infinity;
-  let maxMs = -Infinity;
-  for (const row of rows) {
-    const dt = parseDateTimeCell(row[DT_ENTREGA_COL_IDX] ?? "");
-    if (!dt) continue;
-    const ms = new Date(dt.replace(" ", "T")).getTime();
-    if (Number.isFinite(ms)) {
-      minMs = Math.min(minMs, ms);
-      maxMs = Math.max(maxMs, ms);
-    }
-  }
-  if (!Number.isFinite(minMs)) {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, "0");
-    return { from: `${y}-${m}-01 00:00:00`, to: `${y}-${m}-31 23:59:59` };
-  }
-  const from = new Date(minMs);
-  from.setHours(0, 0, 0, 0);
-  const to = new Date(maxMs);
-  to.setHours(23, 59, 59, 999);
-  const fmt = (d: Date) => {
-    const p = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-  };
-  return { from: fmt(from), to: fmt(to) };
-}
-
-export function comparePedidoGroups(params: {
-  fileGroups: Map<string, string[][]>;
-  dbGroups: Map<string, string[][]>;
-}): { changed: string[]; unchanged: string[] } {
-  const changed: string[] = [];
-  const unchanged: string[] = [];
-  for (const [pedido, fileRows] of params.fileGroups) {
-    const dbRows = params.dbGroups.get(pedido) ?? [];
-    const fileH = hashPedidoGroupNormalized(fileRows);
-    const dbH = dbRows.length ? hashPedidoGroupNormalized(dbRows) : "";
-    if (fileH === dbH && dbRows.length > 0) unchanged.push(pedido);
-    else changed.push(pedido);
-  }
-  return { changed, unchanged };
 }

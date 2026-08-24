@@ -172,6 +172,8 @@ export type DiffResult = {
     ignoredResumo?: number;
     ignoredNoNumero?: number;
     insertedRowCount?: number;
+    monthFrom?: string;
+    monthToExclusive?: string;
   };
   processMessage?: string | null;
   pagination?: {

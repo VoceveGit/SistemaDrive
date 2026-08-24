@@ -15,3 +15,8 @@ export type {
   CodedImportSummary,
   CodedSolutionRunResult,
 } from "./types.js";
+export {
+  dedupeHeadersPandasStyle,
+  mapRowsToDbColumnOrder,
+  ffillAllColumns,
+} from "./columnMap.js";
