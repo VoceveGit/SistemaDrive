@@ -141,21 +141,72 @@ function cellObjectToString(cell: XLSX.CellObject | undefined): string {
 export type AvinorSheetLoad = {
   headers: string[];
   rows: string[][];
+  /** Linha 1-based onde o cabeçalho foi encontrado. */
+  headerRowUsed: number;
+  /** Linha 1-based onde os dados começam. */
+  dataRowUsed: number;
 };
+
+function readHeaderCells(
+  sheet: XLSX.WorkSheet,
+  range: XLSX.Range,
+  headerRowIndex: number,
+): string[] {
+  const headers: string[] = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const addr = XLSX.utils.encode_cell({ r: headerRowIndex, c });
+    const text = sanitizeExcelText(cellObjectToString(sheet[addr]));
+    headers.push(text);
+  }
+  while (headers.length > 0 && !headers[headers.length - 1]) headers.pop();
+  return headers;
+}
+
+function headerLooksValid(headers: string[], markers: string[]): boolean {
+  if (headers.length === 0) return false;
+  if (markers.length === 0) return headers.some((h) => h.trim() !== "");
+  const keys = new Set(
+    headers.map((h) =>
+      sanitizeExcelText(h)
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/\s+/g, "")
+        .replace(/[^a-z0-9%]+/g, ""),
+    ),
+  );
+  return markers.some((m) => {
+    const k = m
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, "")
+      .replace(/[^a-z0-9%]+/g, "");
+    return k && keys.has(k);
+  });
+}
 
 /**
  * Carrega planilha com SheetJS — lê células direto (v + w) pra não perder datas.
+ * Se `headerMarkers` for passado, tenta preferredHeader e as próximas linhas
+ * (ex.: 18 vazia → acha títulos na 19).
  */
 export async function loadAvinorXlsx(params: {
   filePath: string;
-  headerRow: number; // 1-based
-  dataRow: number; // 1-based
+  headerRow: number; // 1-based (preferida)
+  dataRow: number; // 1-based (preferida; se header “andar”, dados = header+1)
   sheetName?: string | null;
   skipFooter?: number;
+  /** Ex.: ["numero","Número"] — se a linha preferida não tiver, sonda as seguintes. */
+  headerMarkers?: string[];
+  /** Quantas linhas além da preferida tentar (default 4 → 18..22). */
+  headerProbeExtra?: number;
   onProgress?: (msg: string, n?: number) => Promise<void>;
 }): Promise<AvinorSheetLoad> {
   const { filePath, headerRow, dataRow, sheetName, onProgress } = params;
   const skipFooter = params.skipFooter ?? 0;
+  const markers = params.headerMarkers ?? [];
+  const probeExtra = params.headerProbeExtra ?? (markers.length ? 4 : 0);
 
   await onProgress?.("Lendo planilha...");
   const buffer = await readFile(filePath);
@@ -178,22 +229,60 @@ export async function loadAvinorXlsx(params: {
   }
 
   const range = XLSX.utils.decode_range(sheet["!ref"]);
-  const headerRowIndex = Math.max(headerRow - 1, 0);
-  const dataStartIndex = Math.max(dataRow - 1, headerRowIndex + 1);
+
+  let resolvedHeaderRow = headerRow;
+  let headers = readHeaderCells(sheet, range, Math.max(headerRow - 1, 0));
+
+  if (markers.length > 0 || headers.length === 0) {
+    const start = Math.max(headerRow, 1);
+    const end = Math.min(start + probeExtra, range.e.r + 1);
+    let found = headerLooksValid(headers, markers);
+    if (!found) {
+      for (let tryRow = start; tryRow <= end; tryRow++) {
+        const candidate = readHeaderCells(sheet, range, tryRow - 1);
+        if (headerLooksValid(candidate, markers)) {
+          resolvedHeaderRow = tryRow;
+          headers = candidate;
+          found = true;
+          break;
+        }
+      }
+    }
+    if (!found && headers.length === 0) {
+      throw new Error(
+        `Cabeçalho vazio na linha ${headerRow}` +
+          (probeExtra > 0 ? ` (também tentei até a ${end})` : ""),
+      );
+    }
+    if (!found && markers.length > 0) {
+      throw new Error(
+        `Não achei cabeçalho com ${markers[0]} nas linhas ${start}–${end}. ` +
+          `Confira se os títulos mudaram de lugar de novo.`,
+      );
+    }
+  }
+
+  if (headers.length === 0) {
+    throw new Error(`Cabeçalho vazio na linha ${resolvedHeaderRow}`);
+  }
+
+  // Se o título “andou”, dados começam na linha seguinte ao cabeçalho achado
+  const resolvedDataRow =
+    resolvedHeaderRow !== headerRow
+      ? resolvedHeaderRow + 1
+      : Math.max(dataRow, resolvedHeaderRow + 1);
+
+  const headerRowIndex = resolvedHeaderRow - 1;
+  const dataStartIndex = resolvedDataRow - 1;
 
   if (headerRowIndex > range.e.r) {
-    throw new Error(`Cabeçalho (linha ${headerRow}) fora da planilha`);
+    throw new Error(`Cabeçalho (linha ${resolvedHeaderRow}) fora da planilha`);
   }
 
-  const headers: string[] = [];
-  for (let c = range.s.c; c <= range.e.c; c++) {
-    const addr = XLSX.utils.encode_cell({ r: headerRowIndex, c });
-    const text = sanitizeExcelText(cellObjectToString(sheet[addr]));
-    headers.push(text);
-  }
-  while (headers.length > 0 && !headers[headers.length - 1]) headers.pop();
-  if (headers.length === 0) {
-    throw new Error(`Cabeçalho vazio na linha ${headerRow}`);
+  if (resolvedHeaderRow !== headerRow) {
+    await onProgress?.(
+      `Cabeçalho na linha ${resolvedHeaderRow} (preferida era ${headerRow}); dados a partir da ${resolvedDataRow}`,
+    );
   }
 
   let lastDataRow = range.e.r;
@@ -220,5 +309,10 @@ export async function loadAvinorXlsx(params: {
   }
 
   await onProgress?.(`Leitura OK: ${rows.length} linhas de dados`, rows.length);
-  return { headers, rows };
+  return {
+    headers,
+    rows,
+    headerRowUsed: resolvedHeaderRow,
+    dataRowUsed: resolvedDataRow,
+  };
 }

@@ -34,6 +34,8 @@ export type FaturamentoParseResult = {
   stoppedAtFooter: boolean;
   numeroColIdx: number;
   missingColumns: string[];
+  headerRowUsed: number;
+  dataRowUsed: number;
 };
 
 export async function parseFaturamentoSpreadsheet(params: {
@@ -59,6 +61,9 @@ export async function parseFaturamentoSpreadsheet(params: {
       headerRow,
       dataRow,
       skipFooter: 0,
+      // Linha 18 às vezes vem vazia — tenta 18, 19, 20…
+      headerMarkers: ["numero", "Número", "Numero", "vendedor", "Vendedor"],
+      headerProbeExtra: 4,
       onProgress,
     });
 
@@ -71,10 +76,12 @@ export async function parseFaturamentoSpreadsheet(params: {
       "Nro",
     );
     if (numeroIdxSheet < 0) {
-      throw new Error('Coluna "numero" não encontrada no cabeçalho (linha 18).');
+      throw new Error(
+        `Coluna "numero" não encontrada no cabeçalho (linha ${loaded.headerRowUsed}).`,
+      );
     }
 
-    const headerRowsSkipped = Math.max(0, dataRow - 1);
+    const headerRowsSkipped = Math.max(0, loaded.dataRowUsed - 1);
     const rawValid: string[][] = [];
     let linesRead = 0;
 
@@ -85,7 +92,6 @@ export async function parseFaturamentoSpreadsheet(params: {
 
       if (isFaturamentoFooterStopRow(row)) {
         stoppedAtFooter = true;
-        // Esta linha + o que sobrou no arquivo = rodapé saltado
         skippedFooter = loaded.rows.length - i;
         break;
       }
@@ -130,6 +136,8 @@ export async function parseFaturamentoSpreadsheet(params: {
       stoppedAtFooter,
       numeroColIdx,
       missingColumns: mapped.missingColumns,
+      headerRowUsed: loaded.headerRowUsed,
+      dataRowUsed: loaded.dataRowUsed,
     };
   } finally {
     await safeUnlink(tmpPath);

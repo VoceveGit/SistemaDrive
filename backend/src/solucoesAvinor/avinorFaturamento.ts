@@ -127,6 +127,7 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
     note:
       `Pronto p/ enviar: ${rowsToInsert.length} nota(s) no staging ` +
       `(${numerosExistentes} já no banco). ` +
+      `Cabeçalho L${parsed.headerRowUsed}, dados L${parsed.dataRowUsed}. ` +
       `Saltadas: ${skippedTotal} ` +
       `(topo ${parsed.headerRowsSkipped}, sem nº ${parsed.skippedNoNumero}, rodapé ${parsed.skippedFooter}).` +
       missingNote,
