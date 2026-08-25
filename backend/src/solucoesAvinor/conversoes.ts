@@ -6,13 +6,29 @@ export type MysqlColMeta = {
 };
 
 export function parseNumberBr(raw: string): number | null {
-  const s = String(raw ?? "").trim();
+  // Remove espaços normais e NBSP (Excel BR/FR usa como milhar: "39 480,00")
+  let s = String(raw ?? "")
+    .replace(/[\u00A0\u202F\u2007\u2009]/g, " ")
+    .trim();
   if (!s || s === "-" || s === "—") return null;
+
+  // "R$ 39.480,00" / "R$39 480,00"
+  s = s.replace(/^R\$\s*/i, "").trim();
+
+  // Milhar com espaço: "39 480,00" / "1 100 288,80"
+  if (/^-?\d{1,3}( \d{3})+(,\d+)?$/.test(s)) {
+    const n = Number(s.replace(/ /g, "").replace(",", "."));
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // Milhar com ponto + decimal vírgula: "39.480,00"
   if (/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s) || /^-?\d+,\d+$/.test(s)) {
     const n = Number(s.replace(/\./g, "").replace(",", "."));
     return Number.isFinite(n) ? n : null;
   }
-  const n = Number(s.replace(/,/g, ""));
+
+  // Já “cru”: 39480.00 / 39480
+  const n = Number(s.replace(/,/g, "").replace(/ /g, ""));
   return Number.isFinite(n) ? n : null;
 }
 
