@@ -225,7 +225,9 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
                 <span>
                   <span className="block font-medium text-text-primary">Envio automático</span>
                   <span className="mt-1 block text-sm text-text-secondary">
-                    Ao detectar planilha, compara e envia. Em erro, desliga o automático.
+                    {useCodedSolution
+                      ? "Com solução codada, use também “Automatizar solução” na aba Importação (mesmo interruptor)."
+                      : "Ao detectar planilha, compara e envia. Em erro, desliga o automático."}
                   </span>
                 </span>
               </label>
@@ -278,35 +280,55 @@ export function CompanySettingsModal({ company, onClose }: CompanySettingsModalP
                   </span>
                 </label>
                 {useCodedSolution && (
-                  <label className="block">
-                    <span className="mb-1.5 block text-sm text-text-secondary">
-                      Qual solução
-                    </span>
-                    <select
-                      className="input"
-                      value={codedSolutionId}
-                      onChange={(e) => {
-                        const id = e.target.value;
-                        setCodedSolutionId(id);
-                        const sol = codedSolutions.find((s) => s.id === id);
-                        if (sol && (!targetTable || targetTable === "base_clientes_avinor")) {
-                          setTargetTable(sol.defaultTargetTable);
-                        }
-                      }}
-                    >
-                      <option value="">Selecione…</option>
-                      {codedSolutions.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.label}
-                        </option>
-                      ))}
-                    </select>
-                    {selectedCoded && (
-                      <p className="mt-2 text-xs text-text-secondary">
-                        {selectedCoded.description}
-                      </p>
-                    )}
-                  </label>
+                  <>
+                    <label className="block">
+                      <span className="mb-1.5 block text-sm text-text-secondary">
+                        Qual solução
+                      </span>
+                      <select
+                        className="input"
+                        value={codedSolutionId}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          setCodedSolutionId(id);
+                          const sol = codedSolutions.find((s) => s.id === id);
+                          if (sol && (!targetTable || targetTable === "base_clientes_avinor")) {
+                            setTargetTable(sol.defaultTargetTable);
+                          }
+                        }}
+                      >
+                        <option value="">Selecione…</option>
+                        {codedSolutions.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedCoded && (
+                        <p className="mt-2 text-xs text-text-secondary">
+                          {selectedCoded.description}
+                        </p>
+                      )}
+                    </label>
+                    <label className="flex items-start gap-3 rounded-lg border border-border bg-bg-card/50 p-3">
+                      <input
+                        type="checkbox"
+                        checked={autoSend}
+                        onChange={(e) => setAutoSend(e.target.checked)}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-text-primary">
+                          Automatizar solução
+                        </span>
+                        <span className="mt-1 block text-xs text-text-secondary">
+                          Ao salvar, enfileira a planilha mais nova ainda não enviada. Novos
+                          arquivos entram na fila (1 por vez: ler → enviar). Manual continua
+                          disponível.
+                        </span>
+                      </span>
+                    </label>
+                  </>
                 )}
               </section>
 

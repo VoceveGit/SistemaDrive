@@ -15,6 +15,16 @@ import {
 } from "lucide-react";
 import { api, type Company, type Spreadsheet } from "../../lib/api";
 import { cn, formatDateTime, formatNumber } from "../../lib/utils";
+
+function formatDurationBetween(start: string, end: string): string {
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s ? `${m}m ${s}s` : `${m}m`;
+}
 import { SpreadsheetDiff } from "./SpreadsheetDiff";
 import { CompanySettingsModal } from "../companies/CompanySettingsModal";
 
@@ -438,7 +448,16 @@ function SpreadsheetRow({
             </p>
           )}
         </td>
-        <td className="px-4 py-3 text-text-secondary">{formatDateTime(sheet.detectedAt)}</td>
+        <td className="px-4 py-3 text-text-secondary">
+          <div>{formatDateTime(sheet.detectedAt)}</div>
+          {sheet.status === "sent" && sheet.sentAt && (
+            <p className="mt-0.5 text-[11px] text-text-muted">
+              Enviado {formatDateTime(sheet.sentAt)}
+              {" · "}
+              {formatDurationBetween(sheet.detectedAt, sheet.sentAt)}
+            </p>
+          )}
+        </td>
         <td className="px-4 py-3 font-mono">{formatNumber(sheet.totalRows)}</td>
         <td className="px-4 py-3 font-mono text-accent-green">
           {formatNumber(sheet.newRows)}

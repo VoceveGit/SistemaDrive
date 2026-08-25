@@ -181,6 +181,20 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
       },
     });
 
+    // Com automação + solução codada: ao salvar, tenta enfileirar o mais novo não enviado
+    if (company.autoSend && company.useCodedSolution && company.codedSolutionId) {
+      void import("../services/codedAutoService.js")
+        .then(({ enqueueNewestUnsentForCompany }) =>
+          enqueueNewestUnsentForCompany(company.id),
+        )
+        .then((r) => {
+          if (r.enqueued) {
+            console.log(`[updateCompany] auto enfileirou ${r.fileName}`);
+          }
+        })
+        .catch((e) => console.warn("[updateCompany] auto enqueue:", e));
+    }
+
     res.json({ success: true, company });
   } catch (error) {
     console.error("[updateCompany]", error);

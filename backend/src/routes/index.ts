@@ -88,4 +88,15 @@ router.post("/spreadsheets/:id/approve", approveSpreadsheet);
 router.post("/spreadsheets/:id/send", sendSpreadsheet);
 router.post("/spreadsheets/:id/send-test", sendTestSpreadsheet);
 
+router.get("/import-queue", async (_req, res) => {
+  try {
+    const { getCodedAutoQueueView } = await import("../services/codedAutoService.js");
+    const view = await getCodedAutoQueueView();
+    res.json({ success: true, ...view });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Erro ao ler fila";
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
 export default router;

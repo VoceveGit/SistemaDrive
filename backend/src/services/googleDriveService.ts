@@ -334,8 +334,6 @@ export async function selectDriveFileForImport(params: {
 }
 
 export async function pollAllCompanies(): Promise<void> {
-  // Poll não cria/baixa mais — a UI lista o Drive e o usuário escolhe o arquivo.
-  // Mantido o cron só para aquecer/validar conexão ocasionalmente.
   const drive = await getDriveClient();
   if (!drive) {
     console.warn(
@@ -343,5 +341,12 @@ export async function pollAllCompanies(): Promise<void> {
     );
     return;
   }
-  console.log("[Drive] Poll OK (lista sob demanda na UI; sem auto-import)");
+
+  // Automação soluções codadas: arquivo mais novo não enviado → fila (1 job por vez)
+  try {
+    const { scanCodedAutoCompanies } = await import("./codedAutoService.js");
+    await scanCodedAutoCompanies();
+  } catch (e) {
+    console.warn("[Drive] scan coded auto:", e);
+  }
 }

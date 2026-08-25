@@ -1,8 +1,8 @@
 // frontend/src/components/layout/Header.tsx
 
-import { useEffect, useRef } from "react";
-import { Bell, Database, LogOut } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { Bell, Database, Download, Loader2, LogOut } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useAuthStore } from "../../stores/authStore";
@@ -13,11 +13,42 @@ type HeaderProps = {
   sidebarWidth: string;
 };
 
+type QueueItem = {
+  spreadsheetId: string;
+  companyId: string;
+  companyName: string;
+  fileName: string;
+  status: string;
+  processMessage: string | null;
+  phase: "queued" | "reading" | "sending";
+  progressPct: number;
+  totalRows: number;
+  processedRows: number;
+};
+
+type ImportQueueResponse = {
+  success: boolean;
+  active: QueueItem | null;
+  queue: QueueItem[];
+  statusLabel: "Baixando" | "Enviando" | null;
+  recent: Array<{
+    spreadsheetId: string;
+    companyId: string;
+    companyName: string;
+    fileName: string;
+    at: string;
+    durationMs: number | null;
+    ok: boolean;
+    message: string;
+  }>;
+};
+
 export function Header({ sidebarWidth }: HeaderProps) {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const panelRef = useRef<HTMLDivElement>(null);
+  const dlRef = useRef<HTMLDivElement>(null);
 
   const items = useNotificationStore((s) => s.items);
   const panelOpen = useNotificationStore((s) => s.panelOpen);
@@ -25,6 +56,10 @@ export function Header({ sidebarWidth }: HeaderProps) {
   const markRead = useNotificationStore((s) => s.markRead);
   const markAllRead = useNotificationStore((s) => s.markAllRead);
   const requestOpenCompany = useNotificationStore((s) => s.requestOpenCompany);
+  const pruneOldDays = useNotificationStore((s) => s.pruneOldDays);
+  const addNotification = useNotificationStore((s) => s.addNotification);
+  const seenCompletionIds = useNotificationStore((s) => s.seenCompletionIds);
+  const markCompletionSeen = useNotificationStore((s) => s.markCompletionSeen);
 
   const unread = items.filter((n) => !n.read).length;
 
@@ -34,22 +69,68 @@ export function Header({ sidebarWidth }: HeaderProps) {
     refetchInterval: 60_000,
   });
 
+  const { data: queueData } = useQuery({
+    queryKey: ["import-queue"],
+    queryFn: () => api<ImportQueueResponse>("/import-queue"),
+    refetchInterval: 2_500,
+  });
+
+  const [dlOpen, setDlOpen] = useState(false);
+  const queryClient = useQueryClient();
+
   useEffect(() => {
-    if (!panelOpen) return;
+    pruneOldDays();
+  }, [pruneOldDays]);
+
+  useEffect(() => {
+    const recent = queueData?.recent ?? [];
+    for (const c of recent) {
+      if (seenCompletionIds.includes(c.spreadsheetId)) continue;
+      markCompletionSeen(c.spreadsheetId);
+      addNotification({
+        companyId: c.companyId,
+        companyName: c.companyName,
+        fileName: c.fileName,
+        spreadsheetId: c.spreadsheetId,
+        kind: c.ok ? "success" : "error",
+        message: c.message,
+      });
+      void queryClient.invalidateQueries({ queryKey: ["spreadsheets"] });
+      void queryClient.invalidateQueries({ queryKey: ["companies"] });
+    }
+  }, [
+    queueData?.recent,
+    seenCompletionIds,
+    markCompletionSeen,
+    addNotification,
+    queryClient,
+  ]);
+
+  useEffect(() => {
+    if (!panelOpen && !dlOpen) return;
     function onClickOutside(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+      const t = e.target as Node;
+      if (panelOpen && panelRef.current && !panelRef.current.contains(t)) {
         setPanelOpen(false);
+      }
+      if (dlOpen && dlRef.current && !dlRef.current.contains(t)) {
+        setDlOpen(false);
       }
     }
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
-  }, [panelOpen, setPanelOpen]);
+  }, [panelOpen, dlOpen, setPanelOpen]);
 
   function handleNotificationClick(n: (typeof items)[number]) {
     markRead(n.id);
     requestOpenCompany(n.companyId);
     navigate("/dashboard");
   }
+
+  const active = queueData?.active ?? null;
+  const waiting = queueData?.queue ?? [];
+  const statusLabel = queueData?.statusLabel ?? null;
+  const hasQueue = Boolean(active || waiting.length);
 
   return (
     <header
@@ -74,10 +155,63 @@ export function Header({ sidebarWidth }: HeaderProps) {
           {connection?.connected ? "Banco conectado" : "Banco offline"}
         </div>
 
+        {/* Fila / downloads (leve, estilo sino) */}
+        <div className="relative flex items-center gap-1.5" ref={dlRef}>
+          <button
+            type="button"
+            onClick={() => {
+              setDlOpen(!dlOpen);
+              setPanelOpen(false);
+            }}
+            className="relative rounded-lg p-2 text-text-secondary hover:bg-bg-card hover:text-text-primary"
+            aria-label="Fila de envios"
+          >
+            {hasQueue ? (
+              <Loader2 size={20} className="animate-spin text-accent-blue" />
+            ) : (
+              <Download size={20} />
+            )}
+            {hasQueue && (
+              <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-blue px-1 text-[10px] font-bold text-white">
+                {(active ? 1 : 0) + waiting.length}
+              </span>
+            )}
+          </button>
+          {statusLabel && (
+            <span className="hidden text-xs text-text-secondary sm:inline">{statusLabel}…</span>
+          )}
+
+          {dlOpen && (
+            <div className="absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-xl border border-border bg-bg-surface shadow-xl">
+              <div className="border-b border-border px-4 py-3">
+                <p className="text-sm font-medium text-text-primary">Envios em andamento</p>
+                <p className="text-[11px] text-text-muted">1 processo por vez · fila global</p>
+              </div>
+              <div className="max-h-80 overflow-y-auto">
+                {!hasQueue ? (
+                  <p className="px-4 py-8 text-center text-sm text-text-secondary">
+                    Nada na fila agora
+                  </p>
+                ) : (
+                  <>
+                    {active && <QueueRow item={active} highlight />}
+                    {waiting.map((q) => (
+                      <QueueRow key={q.spreadsheetId} item={q} />
+                    ))}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
         <div className="relative" ref={panelRef}>
           <button
             type="button"
-            onClick={() => setPanelOpen(!panelOpen)}
+            onClick={() => {
+              setPanelOpen(!panelOpen);
+              setDlOpen(false);
+            }}
             className="relative rounded-lg p-2 text-text-secondary hover:bg-bg-card hover:text-text-primary"
             aria-label="Notificações"
           >
@@ -107,7 +241,7 @@ export function Header({ sidebarWidth }: HeaderProps) {
               <div className="max-h-80 overflow-y-auto">
                 {items.length === 0 ? (
                   <p className="px-4 py-8 text-center text-sm text-text-secondary">
-                    Nenhuma notificação ainda
+                    Nenhuma notificação hoje
                   </p>
                 ) : (
                   items.map((n) => (
@@ -121,7 +255,7 @@ export function Header({ sidebarWidth }: HeaderProps) {
                       )}
                     >
                       <span className="truncate text-sm font-medium text-text-primary">
-                        {n.fileName}
+                        {n.message ?? n.fileName}
                       </span>
                       <span className="text-xs text-text-secondary">{n.companyName}</span>
                       <span className="text-[11px] text-text-muted">
@@ -151,5 +285,36 @@ export function Header({ sidebarWidth }: HeaderProps) {
         </div>
       </div>
     </header>
+  );
+}
+
+function QueueRow({ item, highlight }: { item: QueueItem; highlight?: boolean }) {
+  const phaseLabel =
+    item.phase === "sending"
+      ? "Enviando"
+      : item.phase === "reading"
+        ? "Lendo / baixando"
+        : "Na fila";
+
+  return (
+    <div
+      className={cn(
+        "border-b border-border/60 px-4 py-3",
+        highlight && "bg-accent-blue/5",
+      )}
+    >
+      <p className="truncate text-sm font-medium text-text-primary">{item.fileName}</p>
+      <p className="text-xs text-text-secondary">{item.companyName}</p>
+      <p className="mt-1 text-[11px] text-text-muted">
+        {phaseLabel}
+        {item.processMessage ? ` · ${item.processMessage}` : ""}
+      </p>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-bg-card">
+        <div
+          className="h-full rounded-full bg-accent-blue transition-all"
+          style={{ width: `${Math.max(4, item.progressPct)}%` }}
+        />
+      </div>
+    </div>
   );
 }

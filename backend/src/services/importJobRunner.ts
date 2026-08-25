@@ -79,7 +79,6 @@ async function pump(): Promise<void> {
           where: { id },
           select: { status: true, processMessage: true },
         });
-        // Se o worker já marcou error/pending, não sobrescreve
         if (sheet?.status === "processing") {
           await prisma.spreadsheet
             .update({
@@ -93,6 +92,14 @@ async function pump(): Promise<void> {
               },
             })
             .catch(() => undefined);
+        }
+      } else {
+        // Auto-commit coded (se autoSend) — antes do próximo da fila
+        try {
+          const { maybeAutoCommitAfterImport } = await import("./codedAutoService.js");
+          await maybeAutoCommitAfterImport(id);
+        } catch (e) {
+          console.warn(`[importJob] auto-commit ${id}:`, e);
         }
       }
       void pump();
