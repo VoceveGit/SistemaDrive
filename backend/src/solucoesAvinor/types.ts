@@ -53,9 +53,17 @@ export type FaturamentoSummary = {
   skippedFooter?: number;
   ignoredResumo: number;
   ignoredNoNumero: number;
+  /** Qtd de números distintos na planilha (informativo) */
   numerosNovos: number;
   numerosExistentes: number;
+  rowsToInsert?: number;
   insertedRowCount: number;
+  /** Janela DELETE: Data >= monthFrom AND Data < monthToExclusive */
+  monthFrom?: string;
+  monthToExclusive?: string;
+  dateMin?: string;
+  dateMax?: string;
+  sampleDates?: string[];
   note: string;
 };
 

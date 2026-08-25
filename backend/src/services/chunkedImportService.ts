@@ -160,10 +160,7 @@ export async function runChunkedImport(params: {
         status: "pending",
         totalRows: importSummary.validRows,
         processedRows: importSummary.validRows,
-        newRows:
-          importSummary.mode === "faturamento"
-            ? importSummary.numerosNovos
-            : importSummary.rowsToInsert,
+        newRows: importSummary.rowsToInsert ?? importSummary.validRows,
         updatedRows: 0,
         processMessage: importSummary.note,
         rawData: JSON.stringify({

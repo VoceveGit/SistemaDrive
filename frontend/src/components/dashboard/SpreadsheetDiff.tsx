@@ -275,9 +275,7 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
   let mustSendCounter = -1;
   const canSend =
     (codedSummary
-      ? (codedSummary.mode === "faturamento"
-          ? (codedSummary.numerosNovos ?? 0)
-          : (codedSummary.rowsToInsert ?? 0)) > 0
+      ? (codedSummary.rowsToInsert ?? codedSummary.validRows ?? 0) > 0
       : summary.mustSend > 0 || (summary.mustUpdate ?? 0) > 0) && status !== "sent";
   const sending =
     sendAllMutation.isPending || sendOneMutation.isPending || sendSelectedMutation.isPending;
@@ -344,10 +342,7 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
   // Pedidos / Faturamento: só resumo + data + Enviar (sem tabela / sem Neon pesado)
   if (diff.codedSolution && codedSummary) {
     const canCodedSend =
-      status !== "sent" &&
-      (codedSummary.mode === "faturamento"
-        ? (codedSummary.numerosNovos ?? 0) > 0
-        : (codedSummary.rowsToInsert ?? 0) > 0);
+      status !== "sent" && (codedSummary.rowsToInsert ?? codedSummary.validRows ?? 0) > 0;
 
     return (
       <div className="min-w-0 max-w-full border-t border-border bg-bg-surface p-4">
@@ -414,15 +409,39 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
             {codedSummary.mode === "faturamento" && (
               <>
                 <li>
-                  Números novos:{" "}
-                  <strong className="text-accent-green">
-                    {formatNumber(codedSummary.numerosNovos ?? 0)}
-                  </strong>
+                  Números na planilha:{" "}
+                  <strong>{formatNumber(codedSummary.numerosNovos ?? 0)}</strong>
                 </li>
                 <li>
-                  Já no banco:{" "}
-                  <strong>{formatNumber(codedSummary.numerosExistentes ?? 0)}</strong>
+                  Linhas a inserir:{" "}
+                  <strong className="text-accent-green">
+                    {formatNumber(codedSummary.rowsToInsert ?? codedSummary.validRows)}
+                  </strong>
                 </li>
+                {(codedSummary.dateMin || codedSummary.dateMax) && (
+                  <li className="sm:col-span-2">
+                    Data identificada:{" "}
+                    <strong className="font-mono text-text-primary">
+                      {codedSummary.dateMin}
+                      {codedSummary.dateMax && codedSummary.dateMax !== codedSummary.dateMin
+                        ? ` … ${codedSummary.dateMax}`
+                        : ""}
+                    </strong>
+                  </li>
+                )}
+                {(codedSummary.monthFrom || codedSummary.monthToExclusive) && (
+                  <li className="sm:col-span-2">
+                    Janela (DELETE + INSERT):{" "}
+                    <strong className="font-mono text-text-primary">
+                      {codedSummary.monthFrom} ≤ Data &lt; {codedSummary.monthToExclusive}
+                    </strong>
+                  </li>
+                )}
+                {codedSummary.sampleDates && codedSummary.sampleDates.length > 0 && (
+                  <li className="sm:col-span-2 text-xs text-text-muted">
+                    Amostra de datas: {codedSummary.sampleDates.join(" · ")}
+                  </li>
+                )}
                 <li>
                   Saltadas (topo):{" "}
                   <strong className="text-accent-amber">
@@ -432,7 +451,9 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
                 <li>
                   Saltadas (sem número):{" "}
                   <strong className="text-accent-amber">
-                    {formatNumber(codedSummary.skippedNoNumero ?? codedSummary.ignoredNoNumero ?? 0)}
+                    {formatNumber(
+                      codedSummary.skippedNoNumero ?? codedSummary.ignoredNoNumero ?? 0,
+                    )}
                   </strong>
                 </li>
                 <li>
@@ -448,9 +469,8 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
                   </strong>
                 </li>
                 <li className="sm:col-span-2 text-xs text-text-muted">
-                  Filtro: só linhas com <code className="font-mono">numero</code> válido. Topo
-                  (antes da linha de dados) e rodapé (RESUMO GERAL…) não entram. Insert só se o
-                  número ainda não existe no MySQL.
+                  Igual pedidos: apaga a janela de <code className="font-mono">Data</code> e
+                  reinsere a planilha (mesmo número pode repetir se vier de novo).
                 </li>
               </>
             )}
@@ -627,11 +647,11 @@ export function SpreadsheetDiff({ spreadsheetId, status, companyId }: Spreadshee
             <>
               <Chip
                 color="green"
-                label={`${formatNumber(codedSummary.numerosNovos ?? 0)} números novos`}
+                label={`${formatNumber(codedSummary.rowsToInsert ?? codedSummary.validRows)} na janela (reinserir)`}
               />
               <Chip
                 color="amber"
-                label={`${formatNumber(codedSummary.numerosExistentes ?? 0)} já no banco`}
+                label={`${formatNumber(codedSummary.ignoredRows)} saltadas`}
               />
             </>
           )

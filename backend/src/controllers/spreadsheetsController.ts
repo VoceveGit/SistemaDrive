@@ -214,10 +214,7 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
       // Solução codada — resumo leve (sem tabela / sem Neon pesado)
       if (rawSnap.codedSolution && rawSnap.codedSummary) {
         const s = rawSnap.codedSummary;
-        const mustSend =
-          s.mode === "faturamento"
-            ? (s.numerosNovos ?? 0)
-            : (s.rowsToInsert ?? 0);
+        const mustSend = s.rowsToInsert ?? s.validRows ?? 0;
         const totalRows = spreadsheet.totalRows || s.validRows;
 
         res.json({
@@ -228,8 +225,7 @@ export async function getDiff(req: Request, res: Response): Promise<void> {
             totalRows: 0,
             newRows: mustSend,
             previousRows: 0,
-            alreadyInDb:
-              s.mode === "faturamento" ? (s.numerosExistentes ?? 0) : 0,
+            alreadyInDb: 0,
             mustSend,
             mustUpdate: 0,
             jobTotalRows: totalRows,
@@ -722,8 +718,7 @@ export async function sendSpreadsheet(req: Request, res: Response): Promise<void
             updatedCount: 0,
             mustSendRemaining: 0,
             mustUpdateRemaining: 0,
-            alreadyInDb:
-              s.mode === "faturamento" ? s.numerosExistentes : s.pedidosUnchanged,
+            alreadyInDb: 0,
             skippedColumns: [],
             dbTableRowCount,
             completed: true,
