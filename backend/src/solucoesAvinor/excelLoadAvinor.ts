@@ -127,7 +127,7 @@ function cellObjectToString(cell: XLSX.CellObject | undefined): string {
       if (fromV) return fromV;
     }
     // Moeda / número formatado (ex.: "39 480,00") — usa o texto do Excel
-    if (cell.t === "n" || cell.t === "s" || cell.t === "str") {
+    if (cell.t === "n" || cell.t === "s") {
       return w;
     }
   }
