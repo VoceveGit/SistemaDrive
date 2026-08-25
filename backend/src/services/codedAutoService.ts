@@ -66,23 +66,34 @@ function isBusyStatus(status: string | null | undefined): boolean {
   return status === "queued" || status === "processing";
 }
 
-function startOfTodayLocal(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+function startOfTodaySaoPaulo(): Date {
+  // Meia-noite em America/Sao_Paulo, expressa em Date UTC
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const ymd = fmt.format(new Date()); // YYYY-MM-DD
+  const [y, m, d] = ymd.split("-").map(Number);
+  // 00:00 BRT = 03:00 UTC
+  return new Date(Date.UTC(y!, m! - 1, d!, 3, 0, 0));
 }
 
-/** Data do nome (DD-MM-YYYY) — null se não bater o padrão. */
+function todayYmdSaoPaulo(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+/** Data do nome (DD-MM-YYYY) → YYYY-MM-DD; null se não bater o padrão. */
 function fileNameCalendarDay(name: string): string | null {
   const m = name.match(/(\d{2})-(\d{2})-(\d{4})_(\d{1,2})-(\d{2})/);
   if (!m) return null;
-  return `${m[3]}-${m[2]}-${m[1]}`; // YYYY-MM-DD
-}
-
-function todayYmdLocal(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return `${m[3]}-${m[2]}-${m[1]}`;
 }
 
 /**
@@ -128,7 +139,7 @@ export async function enqueueNewestUnsentForCompany(
 
   if (!files.length) return { enqueued: false, reason: "pasta vazia" };
 
-  const today = todayYmdLocal();
+  const today = todayYmdSaoPaulo();
   const sorted = [...files].sort(
     (a, b) =>
       driveFileRecencyScore(b.name, b.modifiedTime) -
@@ -200,11 +211,15 @@ export async function enqueueNewestUnsentForCompany(
   };
 }
 
-/** Varre todas as empresas com automação codada (poll / cron). */
+/** Varre empresas com automação — NÃO limpa a fila global (senão cancela B/C enquanto A roda). */
 export async function scanCodedAutoCompanies(): Promise<void> {
-  // Garante que histórico antigo não fique na fila de memória
-  const { clearPendingImportQueue } = await import("./importJobRunner.js");
-  await clearPendingImportQueue();
+  const { getImportJobStatus } = await import("./importJobRunner.js");
+  const runner = getImportJobStatus();
+  // Se já tem job pesado rodando, só enfileira quem falta (sem listar Drive de todo mundo em paralelo agressivo)
+  if (runner.queueLength >= 3) {
+    console.log("[codedAuto] fila já cheia — skip scan");
+    return;
+  }
 
   const companies = await prisma.company.findMany({
     where: {
@@ -214,6 +229,7 @@ export async function scanCodedAutoCompanies(): Promise<void> {
       codedSolutionId: { not: null },
     },
     select: { id: true, name: true },
+    orderBy: { name: "asc" },
   });
 
   for (const c of companies) {
@@ -427,7 +443,7 @@ export async function getCodedAutoQueueView(): Promise<{
       status: "processing",
       company: { autoSend: true, useCodedSolution: true },
       processMessage: { contains: "Enviando" },
-      detectedAt: { gte: startOfTodayLocal() },
+      detectedAt: { gte: startOfTodaySaoPaulo() },
     },
     select: { id: true },
     take: 5,

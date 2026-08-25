@@ -95,7 +95,17 @@ router.get("/import-queue", async (_req, res) => {
     res.json({ success: true, ...view });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Erro ao ler fila";
-    res.status(500).json({ success: false, error: message });
+    console.warn("[import-queue]", message);
+    // Nunca derruba o painel: devolve fila vazia
+    res.json({
+      success: true,
+      active: null,
+      queue: [],
+      statusLabel: null,
+      recent: [],
+      jobRunner: { activeId: null, queueIds: [], queueLength: 0 },
+      warning: message,
+    });
   }
 });
 
