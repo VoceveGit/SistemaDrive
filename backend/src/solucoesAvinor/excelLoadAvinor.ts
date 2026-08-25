@@ -79,8 +79,8 @@ function dateFromUnknown(value: unknown): string {
     return formatBr(d);
   }
   if (typeof value === "number" && Number.isFinite(value)) {
-    // Serial Excel (~1970+)
-    if (value >= 25569 && value < 80000) {
+    // Só serial Excel quando quem chama já sabe que é data (formato z / t=d)
+    if (value >= 1 && value < 80000) {
       const d = excelSerialToDate(value);
       return formatBr(
         new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
@@ -90,12 +90,21 @@ function dateFromUnknown(value: unknown): string {
   return "";
 }
 
-/** Converte célula SheetJS → string; datas em DD/MM/YYYY. */
+function cellFormatLooksLikeDate(z: unknown): boolean {
+  if (z == null) return false;
+  const s = String(z);
+  // Ex.: dd/mm/yyyy, m/d/yy — não confundir com moeda (#,##0.00)
+  return /[dy]/i.test(s) && !/[#$€£R]/i.test(s);
+}
+
+/** Converte célula SheetJS → string; NÃO assume que número = data. */
 export function sheetJsCellToString(value: unknown): string {
   if (value == null || value === "") return "";
-  const asDate = dateFromUnknown(value);
-  if (asDate) return asDate;
-  if (typeof value === "number") return String(value);
+  if (value instanceof Date) return dateFromUnknown(value);
+  if (typeof value === "number") {
+    // Número cru: dinheiro, qtd, etc. — nunca tratar como serial de data aqui
+    return String(value);
+  }
   if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
   const s = sanitizeExcelText(String(value));
   if (looksLikeDateText(s)) return normalizeDateText(s);
@@ -105,34 +114,34 @@ export function sheetJsCellToString(value: unknown): string {
 function cellObjectToString(cell: XLSX.CellObject | undefined): string {
   if (!cell) return "";
 
-  // 1) Texto formatado do Excel (melhor pra datas BR)
+  // 1) Texto formatado do Excel
   if (cell.w != null && String(cell.w).trim() !== "") {
     const w = sanitizeExcelText(String(cell.w));
+    // Data explícita (tipo d ou texto DD/MM)
     if (cell.t === "d" || looksLikeDateText(w)) return normalizeDateText(w);
-    // Número formatado como data (z contém d/m/y)
-    if (cell.t === "n" && cell.z && /[dmy]/i.test(String(cell.z))) {
+    // Número com formato de data no Excel
+    if (cell.t === "n" && cellFormatLooksLikeDate(cell.z)) {
       const fromW = normalizeDateText(w);
       if (fromW && looksLikeDateText(fromW)) return fromW;
       const fromV = dateFromUnknown(cell.v);
       if (fromV) return fromV;
     }
+    // Moeda / número formatado (ex.: "39 480,00") — usa o texto do Excel
+    if (cell.t === "n" || cell.t === "s" || cell.t === "str") {
+      return w;
+    }
   }
 
-  // 2) Tipo data / serial
+  // 2) Tipo data nativo
   if (cell.t === "d") {
     const d = dateFromUnknown(cell.v);
     if (d) return d;
   }
-  if (cell.t === "n" && typeof cell.v === "number") {
-    if (cell.z && /[dmy]/i.test(String(cell.z))) {
-      const d = dateFromUnknown(cell.v);
-      if (d) return d;
-    }
-    // Serial “nu” sem formato explícito, mas na faixa de datas modernas
-    if (cell.v >= 30000 && cell.v < 80000) {
-      const d = dateFromUnknown(cell.v);
-      if (d) return d;
-    }
+
+  // 3) Número só vira data se o formato da célula for de data
+  if (cell.t === "n" && typeof cell.v === "number" && cellFormatLooksLikeDate(cell.z)) {
+    const d = dateFromUnknown(cell.v);
+    if (d) return d;
   }
 
   return sheetJsCellToString(cell.v);
