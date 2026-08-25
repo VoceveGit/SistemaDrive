@@ -72,7 +72,18 @@ export function Header({ sidebarWidth }: HeaderProps) {
   const { data: queueData } = useQuery({
     queryKey: ["import-queue"],
     queryFn: () => api<ImportQueueResponse>("/import-queue"),
-    refetchInterval: 2_500,
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      const busy = Boolean(d?.active || (d?.queue?.length ?? 0) > 0);
+      // Sem fila: poll raro. Com fila: 8s (evita 429 no Render Free).
+      return busy ? 8_000 : 20_000;
+    },
+    retry: (failureCount, err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("429") || msg.includes("503")) return failureCount < 2;
+      return failureCount < 1;
+    },
+    retryDelay: (n) => Math.min(30_000, 3_000 * 2 ** n),
   });
 
   const [dlOpen, setDlOpen] = useState(false);

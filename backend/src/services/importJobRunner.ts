@@ -42,6 +42,38 @@ export function enqueueImportJob(spreadsheetId: string): void {
   void pump();
 }
 
+/** Remove tudo que ainda não começou (mantém o job ativo). */
+export async function clearPendingImportQueue(): Promise<number> {
+  const removed = [...queue];
+  queue.length = 0;
+  if (removed.length > 0) {
+    console.log(`[importJob] fila limpa (${removed.length} removido(s); ativo intacto)`);
+    await prisma.spreadsheet
+      .updateMany({
+        where: { id: { in: removed } },
+        data: {
+          status: "error",
+          processMessage:
+            "Cancelado: automação processa só o arquivo mais novo (não o histórico).",
+        },
+      })
+      .catch(() => undefined);
+  }
+  return removed.length;
+}
+
+export function getImportJobStatus(): {
+  activeId: string | null;
+  queueIds: string[];
+  queueLength: number;
+} {
+  return {
+    activeId: active?.spreadsheetId ?? null,
+    queueIds: [...queue],
+    queueLength: queue.length,
+  };
+}
+
 async function pump(): Promise<void> {
   if (active) return;
   const spreadsheetId = queue.shift();
@@ -109,14 +141,4 @@ async function pump(): Promise<void> {
   child.on("error", (err) => {
     console.error(`[importJob] erro ao iniciar worker:`, err);
   });
-}
-
-export function getImportJobStatus(): {
-  activeId: string | null;
-  queueLength: number;
-} {
-  return {
-    activeId: active?.spreadsheetId ?? null,
-    queueLength: queue.length,
-  };
 }

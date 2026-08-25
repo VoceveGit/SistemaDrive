@@ -181,9 +181,11 @@ export async function updateCompany(req: Request, res: Response): Promise<void> 
       },
     });
 
-    // Com automação + solução codada: ao salvar, tenta enfileirar o mais novo não enviado
+    // Com automação + solução codada: ao salvar, limpa fila fantasma e enfileira só o mais novo
     if (company.autoSend && company.useCodedSolution && company.codedSolutionId) {
-      void import("../services/codedAutoService.js")
+      void import("../services/importJobRunner.js")
+        .then(({ clearPendingImportQueue }) => clearPendingImportQueue())
+        .then(() => import("../services/codedAutoService.js"))
         .then(({ enqueueNewestUnsentForCompany }) =>
           enqueueNewestUnsentForCompany(company.id),
         )

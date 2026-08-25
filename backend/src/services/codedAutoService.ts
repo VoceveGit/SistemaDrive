@@ -63,17 +63,32 @@ export function driveFileRecencyScore(name: string, modifiedTime: string | null)
 }
 
 function isBusyStatus(status: string | null | undefined): boolean {
-  return (
-    status === "queued" ||
-    status === "processing" ||
-    status === "pending" ||
-    status === "approved"
-  );
+  return status === "queued" || status === "processing";
+}
+
+function startOfTodayLocal(): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/** Data do nome (DD-MM-YYYY) — null se não bater o padrão. */
+function fileNameCalendarDay(name: string): string | null {
+  const m = name.match(/(\d{2})-(\d{2})-(\d{4})_(\d{1,2})-(\d{2})/);
+  if (!m) return null;
+  return `${m[3]}-${m[2]}-${m[1]}`; // YYYY-MM-DD
+}
+
+function todayYmdLocal(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 /**
  * Para uma empresa com autoSend + solução codada:
- * pega o arquivo mais novo no Drive que ainda não está "sent".
+ * pega SOMENTE o arquivo mais novo do Drive (preferência: do dia de hoje).
+ * Não reprocessa histórico pending antigo.
  */
 export async function enqueueNewestUnsentForCompany(
   companyId: string,
@@ -85,7 +100,7 @@ export async function enqueueNewestUnsentForCompany(
     return { enqueued: false, reason: "sem solução codada" };
   }
 
-  // Já tem job em andamento nesta empresa? Não empilha outro agora.
+  // Job real em andamento (queued/processing) nesta empresa
   const busy = await prisma.spreadsheet.findFirst({
     where: {
       companyId,
@@ -102,29 +117,6 @@ export async function enqueueNewestUnsentForCompany(
     };
   }
 
-  // Pending com codedSummary = esperando Enviar — se auto, o commit pós-worker cuida;
-  // se ficou órfão, tenta commit agora.
-  const pending = await prisma.spreadsheet.findFirst({
-    where: { companyId, status: "pending" },
-    orderBy: { detectedAt: "desc" },
-  });
-  if (pending) {
-    try {
-      const raw = JSON.parse(pending.rawData) as { codedSolution?: boolean; codedSummary?: unknown };
-      if (raw.codedSolution && raw.codedSummary) {
-        await autoCommitCodedSpreadsheet(pending.id);
-        return {
-          enqueued: false,
-          spreadsheetId: pending.id,
-          fileName: pending.fileName,
-          reason: "commit do pending",
-        };
-      }
-    } catch {
-      /* segue pra Drive */
-    }
-  }
-
   let files: Awaited<ReturnType<typeof listDriveFilesForCompany>>;
   try {
     files = await listDriveFilesForCompany(companyId);
@@ -136,13 +128,17 @@ export async function enqueueNewestUnsentForCompany(
 
   if (!files.length) return { enqueued: false, reason: "pasta vazia" };
 
+  const today = todayYmdLocal();
   const sorted = [...files].sort(
     (a, b) =>
       driveFileRecencyScore(b.name, b.modifiedTime) -
       driveFileRecencyScore(a.name, a.modifiedTime),
   );
 
-  const newest = sorted[0]!;
+  // Preferência: mais novo DENTRE os do dia de hoje; senão o mais novo absoluto
+  const ofToday = sorted.filter((f) => fileNameCalendarDay(f.name) === today);
+  const newest = (ofToday[0] ?? sorted[0])!;
+
   if (newest.spreadsheetStatus === "sent") {
     return {
       enqueued: false,
@@ -157,6 +153,35 @@ export async function enqueueNewestUnsentForCompany(
       fileName: newest.name,
       reason: "mais novo já na fila/processo",
     };
+  }
+
+  // Pending antigo do MESMO arquivo (ainda não enviado) → só commit, sem reler
+  if (
+    newest.spreadsheetStatus === "pending" &&
+    newest.spreadsheetId
+  ) {
+    const pending = await prisma.spreadsheet.findUnique({
+      where: { id: newest.spreadsheetId },
+    });
+    if (pending) {
+      try {
+        const raw = JSON.parse(pending.rawData) as {
+          codedSolution?: boolean;
+          codedSummary?: unknown;
+        };
+        if (raw.codedSolution && raw.codedSummary) {
+          await autoCommitCodedSpreadsheet(pending.id);
+          return {
+            enqueued: false,
+            spreadsheetId: pending.id,
+            fileName: pending.fileName,
+            reason: "commit do pending (mesmo arquivo)",
+          };
+        }
+      } catch {
+        /* cai no reprocessar */
+      }
+    }
   }
 
   const result = await selectDriveFileForImport({
@@ -177,6 +202,10 @@ export async function enqueueNewestUnsentForCompany(
 
 /** Varre todas as empresas com automação codada (poll / cron). */
 export async function scanCodedAutoCompanies(): Promise<void> {
+  // Garante que histórico antigo não fique na fila de memória
+  const { clearPendingImportQueue } = await import("./importJobRunner.js");
+  await clearPendingImportQueue();
+
   const companies = await prisma.company.findMany({
     where: {
       active: true,
@@ -378,33 +407,66 @@ function progressPct(total: number, processed: number, phase: QueueItemView["pha
   return Math.min(90, Math.round((processed / Math.max(total, 1)) * 90));
 }
 
-/** Snapshot da fila pra UI de downloads. */
+/** Snapshot da fila pra UI — só jobs REAIS do runner (+ processing ativo). */
 export async function getCodedAutoQueueView(): Promise<{
   active: QueueItemView | null;
   queue: QueueItemView[];
   statusLabel: "Baixando" | "Enviando" | null;
   recent: RecentCompletion[];
-  jobRunner: { activeId: string | null; queueLength: number };
+  jobRunner: { activeId: string | null; queueIds: string[]; queueLength: number };
 }> {
   const runner = getImportJobStatus();
+  const ids = [
+    ...(runner.activeId ? [runner.activeId] : []),
+    ...runner.queueIds,
+  ];
+
+  // Também inclui "processing" recente de auto (fase enviando no processo pai)
+  const sendingSheets = await prisma.spreadsheet.findMany({
+    where: {
+      status: "processing",
+      company: { autoSend: true, useCodedSolution: true },
+      processMessage: { contains: "Enviando" },
+      detectedAt: { gte: startOfTodayLocal() },
+    },
+    select: { id: true },
+    take: 5,
+  });
+  for (const s of sendingSheets) {
+    if (!ids.includes(s.id)) ids.push(s.id);
+  }
+
+  if (ids.length === 0) {
+    return {
+      active: null,
+      queue: [],
+      statusLabel: null,
+      recent: [...recentCompletions].slice(0, 10),
+      jobRunner: runner,
+    };
+  }
 
   const sheets = await prisma.spreadsheet.findMany({
-    where: {
-      status: { in: ["queued", "processing", "pending"] },
-      company: { autoSend: true, useCodedSolution: true },
-    },
+    where: { id: { in: ids } },
     include: { company: { select: { id: true, name: true } } },
-    orderBy: { detectedAt: "asc" },
-    take: 30,
   });
+  const byId = new Map(sheets.map((s) => [s.id, s]));
 
-  const items: QueueItemView[] = sheets.map((s) => {
+  const toView = (id: string): QueueItemView | null => {
+    const s = byId.get(id);
+    if (!s) return null;
     const msg = (s.processMessage ?? "").toLowerCase();
     const sending =
       s.status === "processing" &&
       (msg.includes("enviando") || msg.includes("inserindo") || msg.includes("apagando"));
     const phase: QueueItemView["phase"] =
-      s.status === "queued" ? "queued" : sending ? "sending" : s.status === "pending" ? "queued" : "reading";
+      runner.activeId === id
+        ? sending
+          ? "sending"
+          : "reading"
+        : sending
+          ? "sending"
+          : "queued";
     return {
       spreadsheetId: s.id,
       companyId: s.company.id,
@@ -417,31 +479,33 @@ export async function getCodedAutoQueueView(): Promise<{
       totalRows: s.totalRows,
       processedRows: s.processedRows,
     };
-  });
+  };
 
-  // Ordena: processing first, then by detectedAt (already asc)
-  items.sort((a, b) => {
-    const rank = (p: QueueItemView["phase"]) =>
-      p === "sending" ? 0 : p === "reading" ? 1 : 2;
-    return rank(a.phase) - rank(b.phase);
-  });
+  const active = runner.activeId ? toView(runner.activeId) : null;
+  const queue = runner.queueIds
+    .map((id) => toView(id))
+    .filter((x): x is QueueItemView => Boolean(x));
 
-  const active =
-    items.find((i) => i.phase === "sending" || i.phase === "reading") ??
-    (runner.activeId
-      ? items.find((i) => i.spreadsheetId === runner.activeId) ?? null
-      : null);
-
-  const queue = items.filter((i) => i.spreadsheetId !== active?.spreadsheetId);
+  // Se só tem "enviando" sem estar no runner (commit no processo pai)
+  let activeOut = active;
+  if (!activeOut) {
+    for (const id of ids) {
+      const v = toView(id);
+      if (v?.phase === "sending") {
+        activeOut = v;
+        break;
+      }
+    }
+  }
 
   let statusLabel: "Baixando" | "Enviando" | null = null;
-  if (active?.phase === "sending") statusLabel = "Enviando";
-  else if (active?.phase === "reading") statusLabel = "Baixando";
+  if (activeOut?.phase === "sending") statusLabel = "Enviando";
+  else if (activeOut?.phase === "reading") statusLabel = "Baixando";
   else if (queue.length > 0) statusLabel = "Baixando";
 
   return {
-    active,
-    queue,
+    active: activeOut,
+    queue: queue.filter((q) => q.spreadsheetId !== activeOut?.spreadsheetId),
     statusLabel,
     recent: [...recentCompletions].slice(0, 10),
     jobRunner: runner,
