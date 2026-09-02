@@ -208,7 +208,7 @@ export async function loadAvinorXlsx(params: {
   skipFooter?: number;
   /** Ex.: ["numero","Número"] — se a linha preferida não tiver, sonda as seguintes. */
   headerMarkers?: string[];
-  /** Quantas linhas além da preferida tentar (default 4 → 18..22). */
+  /** Quantas linhas além da preferida tentar (default 4; faturamento usa 8 → 16..24). */
   headerProbeExtra?: number;
   onProgress?: (msg: string, n?: number) => Promise<void>;
 }): Promise<AvinorSheetLoad> {
