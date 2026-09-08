@@ -132,6 +132,39 @@ const FATURAMENTO_ALIASES: Record<string, string[]> = {
   ],
 };
 
+/** Estoque Avinor: planilha tem menos cols que o MySQL — resto fica vazio/NULL. */
+const ESTOQUE_ALIASES: Record<string, string[]> = {
+  codigo: ["Código", "Codigo", "Cód", "Cod"],
+  descricao_produto: [
+    "Descrição Produto",
+    "Descricao Produto",
+    "Descrição do Produto",
+    "Descricao do Produto",
+    "Descrição",
+    "Descricao",
+  ],
+  ultima_saida: [
+    "Ultima saida",
+    "Última saída",
+    "Ultima Saida",
+    "Última Saida",
+    "Ultima Saída",
+  ],
+  peso_unit: ["Peso Unit.", "Peso Unit", "Peso Unitário", "Peso Unitario", "Peso"],
+  saldo_atual: ["Saldo", "Saldo Atual", "Saldo atual"],
+  saldo_anterior: ["Saldo Anterior", "Saldo ant."],
+  producao: ["Produção", "Producao"],
+  entradas: ["Entradas", "Entrada"],
+  saidas: ["Saídas", "Saidas", "Saída", "Saida"],
+  volumes: ["Volumes", "Volume"],
+  estoque_tuneis: ["Estoque Tuneis", "Estoque Túneis", "Estoque tuneis"],
+  volumes_estoque_tuneis: [
+    "Volumes Estoque Tuneis",
+    "Volumes Estoque Túneis",
+    "Vol. Estoque Tuneis",
+  ],
+};
+
 /** Pedidos: MySQL tem Quant._x000D_\\nPedida — planilha vem "Quant. Pedida" etc. */
 const PEDIDOS_ALIASES: Record<string, string[]> = {
   Emp: ["Emp"],
@@ -160,6 +193,7 @@ const PEDIDOS_ALIASES: Record<string, string[]> = {
 };
 
 function aliasesForDbColumn(dbName: string): string[] {
+  if (ESTOQUE_ALIASES[dbName]) return ESTOQUE_ALIASES[dbName];
   if (FATURAMENTO_ALIASES[dbName]) return FATURAMENTO_ALIASES[dbName];
   if (PEDIDOS_ALIASES[dbName]) return PEDIDOS_ALIASES[dbName];
   // Pedidos: nome no MySQL pode ter _x000D_ com variações

@@ -67,6 +67,28 @@ export function isPedidosSkipRow(row: string[], descricaoIdx: number): boolean {
   return desc.includes("total");
 }
 
+/** Estoque: para em Totais / Total no rodapé. */
+export function isEstoqueFooterStopRow(row: string[]): boolean {
+  const joined = row.map((c) => normCell(c)).join(" ");
+  if (joined.includes("totais") || joined.includes("#totales")) return true;
+  for (const cell of row) {
+    const n = normCell(cell);
+    if (n === "total" || n === "totais" || n.startsWith("totais:")) return true;
+  }
+  return false;
+}
+
+/** Linha válida de produto: tem código numérico e não é rodapé. */
+export function isEstoqueSkipRow(row: string[], codigoIdx: number): boolean {
+  if (isEstoqueFooterStopRow(row)) return true;
+  const code = sanitizeExcelText(row[codigoIdx] ?? "").trim();
+  if (!code) return true;
+  const n = normCell(code);
+  if (n === "total" || n === "totais" || n.startsWith("codigo")) return true;
+  const digits = code.replace(/[.\s]/g, "").replace(",", ".");
+  return !/^\d+(\.\d+)?$/.test(digits);
+}
+
 export function padRow(row: string[], len: number): string[] {
   const out = row.slice(0, len);
   while (out.length < len) out.push("");
