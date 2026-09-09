@@ -10,6 +10,7 @@ import {
   mapRowsToDbColumnOrder,
 } from "./columnMap.js";
 import { loadAvinorXlsx } from "./excelLoadAvinor.js";
+import { FATURAMENTO_SHEET_TITLES } from "./headerTitles.js";
 import { pedidosMonthWindowFromDates } from "./parsePedidos.js";
 import {
   isFaturamentoFooterStopRow,
@@ -71,9 +72,8 @@ export async function parseFaturamentoSpreadsheet(params: {
       headerRow,
       dataRow,
       skipFooter: 0,
-      // Layout novo: títulos na L16; legado L18+. Sonda 16→24 (Vendedor/Data/numero).
-      headerMarkers: ["numero", "Número", "Numero", "vendedor", "Vendedor", "Data"],
-      headerProbeExtra: 8,
+      expectedHeaderTitles: FATURAMENTO_SHEET_TITLES,
+      headerScanMaxRow: 50,
       onProgress,
     });
 

@@ -202,7 +202,7 @@ export const AVINOR_FATURAMENTO: CodedSolution = {
   description:
     "Processar → staging. Enviar → DELETE janela (Data) + INSERT planilha. Neon só resumo.",
   defaultTargetTable: "faturamento_avinor",
-  /** Preferida L16 (layout novo); sonda também L17–24 (ex.: antigo L18). */
+  /** Preferida legada; a busca real é pela lista oficial de títulos (até L50). */
   headerRow: 16,
   dataRow: 17,
   autoCommitOnImport: false,

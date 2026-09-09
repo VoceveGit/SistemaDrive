@@ -4,6 +4,10 @@
 import { readFile } from "fs/promises";
 import * as XLSX from "xlsx";
 import { sanitizeExcelText } from "../services/sheetParseService.js";
+import {
+  isGoodHeaderListMatch,
+  scoreHeaderRowAgainstTitles,
+} from "./headerTitles.js";
 
 /** Serial Excel → Date via época Unix (fórmula 25569). */
 export function excelSerialToDate(serial: number): Date {
@@ -197,18 +201,23 @@ function headerLooksValid(headers: string[], markers: string[]): boolean {
 
 /**
  * Carrega planilha com SheetJS — lê células direto (v + w) pra não perder datas.
- * Se `headerMarkers` for passado, tenta preferredHeader e as próximas linhas
- * (ex.: 18 vazia → acha títulos na 19).
+ *
+ * Preferência: `expectedHeaderTitles` → varre linha a linha (até headerScanMaxRow)
+ * comparando a lista oficial de títulos. Fallback: headerMarkers + janela antiga.
  */
 export async function loadAvinorXlsx(params: {
   filePath: string;
-  headerRow: number; // 1-based (preferida)
+  headerRow: number; // 1-based (preferida / fallback)
   dataRow: number; // 1-based (preferida; se header “andar”, dados = header+1)
   sheetName?: string | null;
   skipFooter?: number;
+  /** Lista oficial de títulos na ordem — busca linha a linha. */
+  expectedHeaderTitles?: readonly string[];
+  /** Até qual linha 1-based varrer na busca por lista (default 50). */
+  headerScanMaxRow?: number;
   /** Ex.: ["numero","Número"] — se a linha preferida não tiver, sonda as seguintes. */
   headerMarkers?: string[];
-  /** Quantas linhas além da preferida tentar (default 4; faturamento usa 8 → 16..24). */
+  /** Quantas linhas além da preferida tentar (legado; default 4). */
   headerProbeExtra?: number;
   onProgress?: (msg: string, n?: number) => Promise<void>;
 }): Promise<AvinorSheetLoad> {
@@ -216,6 +225,8 @@ export async function loadAvinorXlsx(params: {
   const skipFooter = params.skipFooter ?? 0;
   const markers = params.headerMarkers ?? [];
   const probeExtra = params.headerProbeExtra ?? (markers.length ? 4 : 0);
+  const expectedTitles = params.expectedHeaderTitles ?? [];
+  const scanMax = params.headerScanMaxRow ?? 50;
 
   await onProgress?.("Lendo planilha...");
   const buffer = await readFile(filePath);
@@ -241,8 +252,44 @@ export async function loadAvinorXlsx(params: {
 
   let resolvedHeaderRow = headerRow;
   let headers = readHeaderCells(sheet, range, Math.max(headerRow - 1, 0));
+  let foundByList = false;
 
-  if (markers.length > 0 || headers.length === 0) {
+  // 1) Busca pela lista oficial de títulos (linha 1..scanMax)
+  if (expectedTitles.length > 0) {
+    const end = Math.min(scanMax, range.e.r + 1);
+    let bestRow = -1;
+    let bestMatched = -1;
+    let bestHeaders: string[] = [];
+
+    await onProgress?.(
+      `Procurando títulos oficiais nas linhas 1–${end} (${expectedTitles.length} cols)...`,
+    );
+
+    for (let tryRow = 1; tryRow <= end; tryRow++) {
+      const candidate = readHeaderCells(sheet, range, tryRow - 1);
+      if (candidate.length === 0) continue;
+      const score = scoreHeaderRowAgainstTitles(candidate, expectedTitles);
+      if (!isGoodHeaderListMatch(score)) continue;
+      // Prefere mais matches; empate → linha mais cedo (já naturalmente)
+      if (score.matched > bestMatched) {
+        bestMatched = score.matched;
+        bestRow = tryRow;
+        bestHeaders = candidate;
+      }
+    }
+
+    if (bestRow > 0) {
+      resolvedHeaderRow = bestRow;
+      headers = bestHeaders;
+      foundByList = true;
+      await onProgress?.(
+        `Cabeçalho achado na linha ${bestRow} (${bestMatched}/${expectedTitles.length} títulos).`,
+      );
+    }
+  }
+
+  // 2) Fallback legado: markers + janela a partir de headerRow
+  if (!foundByList && (markers.length > 0 || headers.length === 0)) {
     const start = Math.max(headerRow, 1);
     const end = Math.min(start + probeExtra, range.e.r + 1);
     let found = headerLooksValid(headers, markers);
@@ -256,6 +303,12 @@ export async function loadAvinorXlsx(params: {
           break;
         }
       }
+    }
+    if (!found && expectedTitles.length > 0) {
+      throw new Error(
+        `Não achei a linha de títulos (lista oficial, ${expectedTitles.length} cols) até a linha ${Math.min(scanMax, range.e.r + 1)}. ` +
+          `Confira se os títulos mudaram de nome.`,
+      );
     }
     if (!found && headers.length === 0) {
       throw new Error(
@@ -275,9 +328,9 @@ export async function loadAvinorXlsx(params: {
     throw new Error(`Cabeçalho vazio na linha ${resolvedHeaderRow}`);
   }
 
-  // Se o título “andou”, dados começam na linha seguinte ao cabeçalho achado
+  // Título achado por lista ou “andou” → dados = linha seguinte
   const resolvedDataRow =
-    resolvedHeaderRow !== headerRow
+    foundByList || resolvedHeaderRow !== headerRow
       ? resolvedHeaderRow + 1
       : Math.max(dataRow, resolvedHeaderRow + 1);
 
@@ -288,7 +341,7 @@ export async function loadAvinorXlsx(params: {
     throw new Error(`Cabeçalho (linha ${resolvedHeaderRow}) fora da planilha`);
   }
 
-  if (resolvedHeaderRow !== headerRow) {
+  if (!foundByList && resolvedHeaderRow !== headerRow) {
     await onProgress?.(
       `Cabeçalho na linha ${resolvedHeaderRow} (preferida era ${headerRow}); dados a partir da ${resolvedDataRow}`,
     );

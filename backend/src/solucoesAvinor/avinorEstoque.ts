@@ -1,6 +1,6 @@
 // backend/src/solucoesAvinor/avinorEstoque.ts
-// Snapshot estoque_avinor: DELETE tudo + INSERT planilha (L20 títulos, dados L21+).
-// Ignora rodapé "Totais". Colunas MySQL sem par na planilha ficam vazias/NULL.
+// Snapshot estoque_avinor: DELETE tudo + INSERT planilha.
+// Cabeçalho: lista oficial de títulos (busca linha a linha até L50). Ignora Totais.
 
 import { downloadDriveFileToTemp, safeUnlink } from "../services/streamSheetService.js";
 import type {
@@ -22,6 +22,7 @@ import {
   mapRowsToDbColumnOrder,
 } from "./columnMap.js";
 import { loadAvinorXlsx } from "./excelLoadAvinor.js";
+import { ESTOQUE_SHEET_TITLES } from "./headerTitles.js";
 import {
   isEstoqueFooterStopRow,
   isEstoqueSkipRow,
@@ -57,22 +58,14 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
     await ctx.onProgress?.("Avinor Estoque: baixando arquivo...");
     tmpPath = await downloadDriveFileToTemp(ctx.drive, ctx.file);
 
-    await ctx.onProgress?.("Avinor Estoque: lendo planilha (L20+)...");
+    await ctx.onProgress?.("Avinor Estoque: localizando títulos na planilha...");
     const loaded = await loadAvinorXlsx({
       filePath: tmpPath,
       headerRow: AVINOR_ESTOQUE.headerRow,
       dataRow: AVINOR_ESTOQUE.dataRow,
       skipFooter: 0,
-      headerMarkers: [
-        "codigo",
-        "Código",
-        "Codigo",
-        "descricao",
-        "Descrição Produto",
-        "Saldo",
-      ],
-      // L20 preferida; se andar, tenta até ~L28
-      headerProbeExtra: 8,
+      expectedHeaderTitles: ESTOQUE_SHEET_TITLES,
+      headerScanMaxRow: 50,
       onProgress: ctx.onProgress,
     });
 
@@ -110,7 +103,7 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
 
     if (!validSheetRows.length) {
       throw new Error(
-        "Nenhuma linha de produto válida. Verifique títulos na linha 20 e dados abaixo.",
+        "Nenhuma linha de produto válida. Verifique a linha de títulos (Código, Descrição…) e os dados abaixo.",
       );
     }
 
@@ -180,10 +173,11 @@ export const AVINOR_ESTOQUE: CodedSolution = {
   id: "avinor_estoque",
   label: "Estoque Avinor",
   description:
-    "Snapshot: apaga estoque_avinor e insere a planilha (L20 títulos). Ignora Totais. Auto-grava no Processar.",
+    "Snapshot: apaga estoque_avinor e insere a planilha. Títulos por lista oficial (busca até L50). Ignora Totais.",
   defaultTargetTable: "estoque_avinor",
-  headerRow: 20,
-  dataRow: 21,
+  /** Preferência legada; a busca real é pela lista de títulos. */
+  headerRow: 16,
+  dataRow: 17,
   autoCommitOnImport: true,
   runImport,
 };
