@@ -55,7 +55,8 @@ async function main() {
 
   await seedAdmin();
 
-  cron.schedule("*/5 * * * *", () => {
+  // A cada 1 min: varre Drive e enfileira só o mais novo (auto) por empresa
+  cron.schedule("* * * * *", () => {
     markPollRan();
     pollAllCompanies().catch((err) => console.error("Erro no polling:", err));
   });
@@ -63,7 +64,7 @@ async function main() {
   // Poll inicial atrasado: API sobe leve; import pesado só via worker (fork)
   setTimeout(() => {
     maybeKickAutoPoll("startup");
-  }, 90_000);
+  }, 45_000);
 
   httpServer.listen(env.port, () => {
     console.log(`Despacho API rodando em http://localhost:${env.port}`);

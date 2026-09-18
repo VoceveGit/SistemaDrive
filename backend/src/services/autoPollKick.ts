@@ -6,8 +6,8 @@ import { pollAllCompanies } from "./googleDriveService.js";
 let lastPollAt = 0;
 let running = false;
 
-/** Intervalo mínimo entre varreduras disparadas pelo /health (ms). */
-const MIN_GAP_MS = 8 * 60_000;
+/** Intervalo mínimo entre varreduras disparadas pelo /health (ms). Cron já roda a cada 1 min. */
+const MIN_GAP_MS = 2 * 60_000;
 
 export function markPollRan(): void {
   lastPollAt = Date.now();
