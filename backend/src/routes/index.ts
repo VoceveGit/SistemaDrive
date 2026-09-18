@@ -113,4 +113,24 @@ router.get("/import-queue", async (_req, res) => {
   }
 });
 
+/** Dispara agora: mais novo não enviado → fila (útil pra destravar / testar). */
+router.post("/auto/scan", async (_req, res) => {
+  try {
+    const { clearStaleImportLocks } = await import("../services/importJobRunner.js");
+    const { scanCodedAutoCompanies } = await import("../services/codedAutoService.js");
+    const { markPollRan } = await import("../services/autoPollKick.js");
+    await clearStaleImportLocks(0); // libera qualquer queued/processing órfão
+    const results = await scanCodedAutoCompanies();
+    markPollRan();
+    res.json({
+      success: true,
+      message: "Varredura AUTO executada",
+      results,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Erro no scan AUTO";
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
 export default router;

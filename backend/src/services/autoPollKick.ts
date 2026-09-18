@@ -7,7 +7,7 @@ let lastPollAt = 0;
 let running = false;
 
 /** Intervalo mínimo entre varreduras disparadas pelo /health (ms). Cron já roda a cada 1 min. */
-const MIN_GAP_MS = 2 * 60_000;
+const MIN_GAP_MS = 45_000;
 
 export function markPollRan(): void {
   lastPollAt = Date.now();

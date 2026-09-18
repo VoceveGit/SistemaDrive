@@ -111,7 +111,7 @@ export async function enqueueNewestUnsentForCompany(
     return { enqueued: false, reason: "sem solução codada" };
   }
 
-  // Job real em andamento (queued/processing) nesta empresa
+  // Job real em andamento — ignora locks órfãos (>10 min; API reiniciou / worker morreu)
   const busy = await prisma.spreadsheet.findFirst({
     where: {
       companyId,
@@ -120,12 +120,24 @@ export async function enqueueNewestUnsentForCompany(
     orderBy: { detectedAt: "desc" },
   });
   if (busy) {
-    return {
-      enqueued: false,
-      spreadsheetId: busy.id,
-      fileName: busy.fileName,
-      reason: "já processando",
-    };
+    const ageMs = Date.now() - new Date(busy.detectedAt).getTime();
+    if (ageMs < 10 * 60_000) {
+      return {
+        enqueued: false,
+        spreadsheetId: busy.id,
+        fileName: busy.fileName,
+        reason: "já processando",
+      };
+    }
+    await prisma.spreadsheet
+      .update({
+        where: { id: busy.id },
+        data: {
+          status: "error",
+          processMessage: "Lock antigo liberado para o AUTO continuar.",
+        },
+      })
+      .catch(() => undefined);
   }
 
   let files: Awaited<ReturnType<typeof listDriveFilesForCompany>>;
@@ -212,13 +224,21 @@ export async function enqueueNewestUnsentForCompany(
 }
 
 /** Varre empresas com automação — NÃO limpa a fila global (senão cancela B/C enquanto A roda). */
-export async function scanCodedAutoCompanies(): Promise<void> {
-  const { getImportJobStatus } = await import("./importJobRunner.js");
+export async function scanCodedAutoCompanies(): Promise<
+  Array<{ companyId: string; name: string; enqueued: boolean; fileName?: string; reason?: string }>
+> {
+  const { getImportJobStatus, clearStaleImportLocks } = await import("./importJobRunner.js");
+
+  const freed = await clearStaleImportLocks(10 * 60_000);
+  if (freed > 0) {
+    console.log(`[codedAuto] liberou ${freed} job(s) órfão(s)`);
+  }
+
   const runner = getImportJobStatus();
   // Se já tem job pesado rodando, só enfileira quem falta (sem listar Drive de todo mundo em paralelo agressivo)
-  if (runner.queueLength >= 3) {
+  if (runner.queueLength >= 5) {
     console.log("[codedAuto] fila já cheia — skip scan");
-    return;
+    return [];
   }
 
   const companies = await prisma.company.findMany({
@@ -232,16 +252,42 @@ export async function scanCodedAutoCompanies(): Promise<void> {
     orderBy: { name: "asc" },
   });
 
+  console.log(`[codedAuto] scan ${companies.length} empresa(s) auto...`);
+  const results: Array<{
+    companyId: string;
+    name: string;
+    enqueued: boolean;
+    fileName?: string;
+    reason?: string;
+  }> = [];
+
   for (const c of companies) {
     try {
       const r = await enqueueNewestUnsentForCompany(c.id);
       if (r.enqueued) {
-        console.log(`[codedAuto] ${c.name}: ${r.fileName}`);
+        console.log(`[codedAuto] ${c.name}: ENFILEIRADO ${r.fileName}`);
+      } else {
+        console.log(`[codedAuto] ${c.name}: skip — ${r.reason ?? "?"} (${r.fileName ?? "-"})`);
       }
+      results.push({
+        companyId: c.id,
+        name: c.name,
+        enqueued: r.enqueued,
+        fileName: r.fileName,
+        reason: r.reason,
+      });
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
       console.warn(`[codedAuto] ${c.name}:`, e);
+      results.push({
+        companyId: c.id,
+        name: c.name,
+        enqueued: false,
+        reason: message,
+      });
     }
   }
+  return results;
 }
 
 /**

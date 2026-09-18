@@ -281,13 +281,14 @@ export async function selectDriveFileForImport(params: {
     orderBy: { detectedAt: "desc" },
   });
 
-  // Se já existe e está pending/processing, só reprocessa o mesmo
+  // Se já existe e está pending/processing/queued/approved/error → reprocessa o mesmo
   if (
     existing &&
     (existing.status === "pending" ||
       existing.status === "processing" ||
       existing.status === "queued" ||
-      existing.status === "approved")
+      existing.status === "approved" ||
+      existing.status === "error")
   ) {
     await prisma.spreadsheet.update({
       where: { id: existing.id },

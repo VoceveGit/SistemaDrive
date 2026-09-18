@@ -42,6 +42,44 @@ export function enqueueImportJob(spreadsheetId: string): void {
   void pump();
 }
 
+/**
+ * Jobs "queued"/"processing" órfãos (API reiniciou / worker morreu) travam o AUTO.
+ * Libera os mais velhos que X minutos para a próxima varredura poder seguir.
+ */
+export async function clearStaleImportLocks(maxAgeMs = 10 * 60_000): Promise<number> {
+  const cutoff = new Date(Date.now() - maxAgeMs);
+  const activeId = active?.spreadsheetId ?? null;
+  const memIds = new Set<string>([...queue, ...(activeId ? [activeId] : [])]);
+
+  const stale = await prisma.spreadsheet.findMany({
+    where: {
+      status: { in: ["queued", "processing"] },
+      detectedAt: { lt: cutoff },
+    },
+    select: { id: true, fileName: true, status: true },
+    take: 50,
+  });
+
+  let n = 0;
+  for (const s of stale) {
+    // Não mata o que ainda está vivo na fila/memória desta instância
+    if (memIds.has(s.id)) continue;
+    await prisma.spreadsheet
+      .update({
+        where: { id: s.id },
+        data: {
+          status: "error",
+          processMessage:
+            "Travado (queued/processing órfão após reinício). AUTO pode tentar o mais novo de novo.",
+        },
+      })
+      .catch(() => undefined);
+    n += 1;
+    console.warn(`[importJob] lock órfão liberado: ${s.fileName} (${s.id})`);
+  }
+  return n;
+}
+
 /** Remove tudo que ainda não começou (mantém o job ativo). */
 export async function clearPendingImportQueue(): Promise<number> {
   const removed = [...queue];
