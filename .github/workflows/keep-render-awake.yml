@@ -1,12 +1,12 @@
-# Mantém o Render Free acordado (~a cada 10 min) para o cron interno + automático rodarem.
-# Intervalo maior que antes para reduzir risco de HTTP 429.
+# Mantém o Render Free acordado.
+# Importante: o cron do GitHub Actions atrasa com frequência; 10 min na prática
+# vira 15–20 min e o Free já dormiu. Por isso */5.
 name: Keep Render Awake
 
 on:
   workflow_dispatch:
   schedule:
-    # A cada 10 minutos (Render free dorme ~15 min sem tráfego)
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
 
 jobs:
   ping:
@@ -16,7 +16,7 @@ jobs:
       - name: Ping Despacho health
         run: |
           set -e
-          # Uma única requisição leve — acordar + /health pode disparar varredura do Drive
+          # Uma requisição leve: acorda o serviço + /health pode disparar varredura
           curl -fsS --max-time 90 "https://despacho-rtlg.onrender.com/api/health" \
-            || curl -fsS --max-time 90 "https://despacho-rtlg.onrender.com/api/health" \
-            || echo "ping falhou (serviço pode estar subindo)"
+            || curl -fsS --max-time 120 "https://despacho-rtlg.onrender.com/api/health" \
+            || echo "ping falhou (cold start demorado)"
