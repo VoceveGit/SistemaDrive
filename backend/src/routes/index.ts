@@ -40,7 +40,11 @@ import { getStats, getConnectionStatus } from "../controllers/dashboardControlle
 const router = Router();
 
 router.get("/health", (_req, res) => {
-  res.json({ success: true, status: "ok" });
+  res.json({ success: true, status: "ok", ts: new Date().toISOString() });
+  // Keep-alive (GitHub Actions): ao acordar o serviço, dispara varredura se estiver ociosa
+  import("../services/autoPollKick.js")
+    .then(({ maybeKickAutoPoll }) => maybeKickAutoPoll("health"))
+    .catch(() => undefined);
 });
 
 router.post("/auth/login", login);

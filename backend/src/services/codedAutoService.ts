@@ -387,11 +387,8 @@ export async function autoCommitCodedSpreadsheet(spreadsheetId: string): Promise
       })
       .catch(() => undefined);
 
-    // Desliga auto nesta empresa (mesmo espírito do processAutoSend legado)
-    await prisma.company
-      .update({ where: { id: company.id }, data: { autoSend: false } })
-      .catch(() => undefined);
-
+    // Não desliga autoSend em falha pontual (Render/Drive/timeout) — só registra erro.
+    // O keep-alive + próximo poll tenta de novo o arquivo mais novo.
     pushCompletion({
       spreadsheetId,
       companyId: company.id,

@@ -1,16 +1,22 @@
-# Keep-alive DESATIVADO — o ping frequente + o app geravam HTTP 429 no Render Free.
-# Para reativar depois (com plano melhor ou intervalo bem maior), descomente o schedule.
+# Mantém o Render Free acordado (~a cada 10 min) para o cron interno + automático rodarem.
+# Intervalo maior que antes para reduzir risco de HTTP 429.
 name: Keep Render Awake
 
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: "0 */2 * * *"
+  schedule:
+    # A cada 10 minutos (Render free dorme ~15 min sem tráfego)
+    - cron: "*/10 * * * *"
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - name: Ping Despacho health
         run: |
-          curl -fsS --max-time 60 "https://despacho-rtlg.onrender.com/api/health" || true
+          set -e
+          # Uma única requisição leve — acordar + /health pode disparar varredura do Drive
+          curl -fsS --max-time 90 "https://despacho-rtlg.onrender.com/api/health" \
+            || curl -fsS --max-time 90 "https://despacho-rtlg.onrender.com/api/health" \
+            || echo "ping falhou (serviço pode estar subindo)"

@@ -14,6 +14,7 @@ import { env, assertDatabaseUrl } from "./config/env.js";
 import router from "./routes/index.js";
 import { seedAdmin } from "./controllers/authController.js";
 import { pollAllCompanies, setSocketServer } from "./services/googleDriveService.js";
+import { markPollRan, maybeKickAutoPoll } from "./services/autoPollKick.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Em produção: backend/dist/src → ../../../frontend/dist */
@@ -55,13 +56,14 @@ async function main() {
   await seedAdmin();
 
   cron.schedule("*/5 * * * *", () => {
+    markPollRan();
     pollAllCompanies().catch((err) => console.error("Erro no polling:", err));
   });
 
   // Poll inicial atrasado: API sobe leve; import pesado só via worker (fork)
   setTimeout(() => {
-    pollAllCompanies().catch((err) => console.error("Erro na varredura inicial:", err));
-  }, 120_000);
+    maybeKickAutoPoll("startup");
+  }, 90_000);
 
   httpServer.listen(env.port, () => {
     console.log(`Despacho API rodando em http://localhost:${env.port}`);
