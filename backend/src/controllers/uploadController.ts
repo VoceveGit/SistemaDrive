@@ -5,10 +5,8 @@ import { writeFile, mkdtemp } from "fs/promises";
 import path from "path";
 import { tmpdir } from "os";
 import { listCodedSolutions } from "../solucoesAvinor/index.js";
-import {
-  listManualUploadTables,
-  runManualPedidosUpload,
-} from "../services/manualUploadService.js";
+import { listManualUploadTables } from "../services/manualUploadService.js";
+import { runManualPedidosUploadIsolated } from "../services/manualUploadRunner.js";
 
 const UPLOAD_SOLUTION_IDS = new Set(["avinor_pedidos"]);
 
@@ -51,7 +49,7 @@ export async function postUploadSpreadsheet(
   const filePath = path.join(dir, safeName);
   await writeFile(filePath, file.buffer);
 
-  const result = await runManualPedidosUpload({
+  const result = await runManualPedidosUploadIsolated({
     filePath,
     fileName: safeName,
     targetTable,

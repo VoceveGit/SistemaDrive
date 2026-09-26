@@ -64,6 +64,8 @@ export function UploadPage() {
     }
     setRunning(true);
     const queue = jobs.filter((j) => j.status === "waiting");
+    let okCount = 0;
+    let failCount = 0;
 
     for (const job of queue) {
       setJobs((prev) =>
@@ -81,14 +83,28 @@ export function UploadPage() {
           headers: { Authorization: `Bearer ${token}` },
           body: form,
         });
-        const data = (await res.json()) as {
-          success?: boolean;
-          note?: string;
-          error?: string;
-        };
-        if (!res.ok || !data.success) {
-          throw new Error(data.error ?? "Falha no upload");
+        const text = await res.text();
+        let data: { success?: boolean; note?: string; error?: string };
+        try {
+          data = text
+            ? (JSON.parse(text) as { success?: boolean; note?: string; error?: string })
+            : {};
+        } catch {
+          throw new Error(
+            res.status === 502 || res.status === 503
+              ? `Servidor indisponível (HTTP ${res.status}). O Render pode estar reiniciando ou a planilha derrubou o processo — espere 1 min e tente de novo, um arquivo por vez.`
+              : `Resposta inválida do servidor (HTTP ${res.status}).`,
+          );
         }
+        if (!res.ok || !data.success) {
+          throw new Error(
+            data.error ??
+              (res.status === 503
+                ? "Serviço temporariamente indisponível (503). Aguarde e tente novamente."
+                : "Falha no upload"),
+          );
+        }
+        okCount += 1;
         setJobs((prev) =>
           prev.map((j) =>
             j.id === job.id
@@ -97,6 +113,7 @@ export function UploadPage() {
           ),
         );
       } catch (e) {
+        failCount += 1;
         const msg = e instanceof Error ? e.message : "Erro";
         setJobs((prev) =>
           prev.map((j) => (j.id === job.id ? { ...j, status: "error", message: msg } : j)),
@@ -105,7 +122,13 @@ export function UploadPage() {
     }
 
     setRunning(false);
-    toast.success("Fila de upload finalizada.");
+    if (failCount > 0 && okCount === 0) {
+      toast.error("Nenhum arquivo enviado. Veja as mensagens abaixo.");
+    } else if (failCount > 0) {
+      toast.warning(`Fila finalizada: ${okCount} ok, ${failCount} com erro.`);
+    } else {
+      toast.success("Fila de upload finalizada.");
+    }
   };
 
   const summary = useMemo(() => {
