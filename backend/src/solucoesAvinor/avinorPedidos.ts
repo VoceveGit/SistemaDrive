@@ -11,7 +11,7 @@ import type {
 } from "./types.js";
 import { listMysqlColumnsOrdered } from "./snapshotMysql.js";
 import { deleteByDateWindow, insertBatchDirect } from "./mysqlDirect.js";
-import { parsePedidosSpreadsheet } from "./parsePedidos.js";
+import { parsePedidosSpreadsheet, parsePedidosSpreadsheetFromPath } from "./parsePedidos.js";
 import { findColumnIndex } from "./columnMap.js";
 import {
   clearStagingJob,
@@ -48,14 +48,22 @@ function asPedidosSummary(raw: unknown): PedidosSummary | null {
 async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunResult> {
   const { targetTable, columns } = await loadColumns(ctx);
 
-  const parsed = await parsePedidosSpreadsheet({
-    drive: ctx.drive,
-    file: ctx.file,
-    dbColumns: columns,
-    headerRow: AVINOR_PEDIDOS.headerRow,
-    dataRow: AVINOR_PEDIDOS.dataRow,
-    onProgress: ctx.onProgress,
-  });
+  const parsed = ctx.localFilePath
+    ? await parsePedidosSpreadsheetFromPath({
+        filePath: ctx.localFilePath,
+        dbColumns: columns,
+        headerRow: AVINOR_PEDIDOS.headerRow,
+        dataRow: AVINOR_PEDIDOS.dataRow,
+        onProgress: ctx.onProgress,
+      })
+    : await parsePedidosSpreadsheet({
+        drive: ctx.drive,
+        file: ctx.file,
+        dbColumns: columns,
+        headerRow: AVINOR_PEDIDOS.headerRow,
+        dataRow: AVINOR_PEDIDOS.dataRow,
+        onProgress: ctx.onProgress,
+      });
 
   await ctx.onProgress?.(
     `Gravando ${parsed.validRows.length} linha(s) no staging (EXTRACTOR)...`,

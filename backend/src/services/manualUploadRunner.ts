@@ -1,29 +1,15 @@
-// Upload manual em child_process (heap isolado — planilhas ~60k linhas).
+// Upload manual: mesmo importWorker do Drive (runImport) + runCommit na API.
 
 import { fork, type ChildProcess } from "child_process";
-import { existsSync } from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-import type { ManualUploadResult } from "./manualUploadService.js";
+import { resolveImportWorkerModule } from "./importJobRunner.js";
+import {
+  runManualPedidosCommit,
+  type ManualUploadResult,
+  type ManualWorkerImportResult,
+} from "./manualUploadService.js";
 import { waitForImportJobIdle } from "./importJobRunner.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 let activeChild: ChildProcess | null = null;
-
-function resolveManualUploadWorker(): { modulePath: string; execArgv: string[] } {
-  const js = path.join(__dirname, "../workers/manualUploadWorker.js");
-  const ts = path.join(__dirname, "../workers/manualUploadWorker.ts");
-  // Mesmo teto do importWorker — 420MB filho + API estourava RAM do Starter.
-  const heap = ["--max-old-space-size=300"];
-  if (existsSync(js)) {
-    return { modulePath: js, execArgv: heap };
-  }
-  return {
-    modulePath: ts,
-    execArgv: ["--import", "tsx", ...heap],
-  };
-}
 
 export type ManualUploadJobParams = {
   filePath: string;
@@ -36,18 +22,17 @@ export function isManualUploadBusy(): boolean {
   return activeChild !== null;
 }
 
-/** Roda upload no worker; API permanece leve para /health e estáticos. */
 export async function runManualPedidosUploadIsolated(
   params: ManualUploadJobParams,
 ): Promise<ManualUploadResult> {
   if (activeChild) {
-    return Promise.resolve({
+    return {
       success: false,
       fileName: params.fileName,
       targetTable: params.targetTable,
       codedSolutionId: params.codedSolutionId,
       error: "Outro upload em andamento. Aguarde terminar (um arquivo por vez).",
-    });
+    };
   }
 
   const idle = await waitForImportJobIdle();
@@ -58,15 +43,15 @@ export async function runManualPedidosUploadIsolated(
       targetTable: params.targetTable,
       codedSolutionId: params.codedSolutionId,
       error:
-        "O processamento automático do Drive ainda está rodando. Espere 2–5 min (fila vazia) e envie de novo — um arquivo por vez.",
+        "O processamento automático do Drive ainda está rodando. Espere 2–5 min e envie de novo — um arquivo por vez.",
     };
   }
 
-  const { modulePath, execArgv } = resolveManualUploadWorker();
+  const { modulePath, execArgv } = resolveImportWorkerModule();
   const payload = JSON.stringify(params);
 
-  return new Promise((resolve) => {
-    const child = fork(modulePath, [payload], {
+  const importResult = await new Promise<ManualWorkerImportResult>((resolve) => {
+    const child = fork(modulePath, ["--manual", payload], {
       execArgv,
       env: { ...process.env },
       stdio: ["ignore", "inherit", "inherit", "ipc"],
@@ -74,14 +59,14 @@ export async function runManualPedidosUploadIsolated(
     activeChild = child;
 
     let settled = false;
-    const finish = (result: ManualUploadResult) => {
+    const finish = (result: ManualWorkerImportResult) => {
       if (settled) return;
       settled = true;
       activeChild = null;
       resolve(result);
     };
 
-    child.on("message", (msg: ManualUploadResult) => {
+    child.on("message", (msg: ManualWorkerImportResult) => {
       finish(msg);
     });
 
@@ -89,24 +74,42 @@ export async function runManualPedidosUploadIsolated(
       if (settled) return;
       const oom = signal === "SIGABRT" || code === 134;
       finish({
-        success: false,
+        ok: false,
         fileName: params.fileName,
         targetTable: params.targetTable,
         codedSolutionId: params.codedSolutionId,
         error: oom
-          ? "Memória insuficiente ao processar a planilha. Tente de novo com um arquivo por vez."
+          ? "Memória insuficiente ao processar a planilha (mesmo limite do import do Drive)."
           : `Processamento interrompido (código ${code ?? "?"}${signal ? ` ${signal}` : ""}).`,
       });
     });
 
     child.on("error", (err) => {
       finish({
-        success: false,
+        ok: false,
         fileName: params.fileName,
         targetTable: params.targetTable,
         codedSolutionId: params.codedSolutionId,
         error: err.message,
       });
     });
+  });
+
+  if (!importResult.ok || !importResult.jobId || !importResult.importSummary) {
+    return {
+      success: false,
+      fileName: params.fileName,
+      targetTable: params.targetTable,
+      codedSolutionId: params.codedSolutionId,
+      error: importResult.error ?? "Falha ao processar planilha no worker.",
+    };
+  }
+
+  return runManualPedidosCommit({
+    jobId: importResult.jobId,
+    fileName: params.fileName,
+    targetTable: params.targetTable,
+    codedSolutionId: params.codedSolutionId,
+    importSummary: importResult.importSummary,
   });
 }

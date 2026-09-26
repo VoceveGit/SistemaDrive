@@ -89,6 +89,8 @@ export type CodedSolutionContext = {
   drive: drive_v3.Drive;
   file: drive_v3.Schema$File;
   dbSettings: DbSettings;
+  /** Upload manual: mesmo parse do Drive, sem download. */
+  localFilePath?: string;
   /** Resumo do Processar (Neon) — usado no Enviar sem reler o Drive. */
   previousSummary?: CodedImportSummary | SnapshotSummary;
   onProgress?: (message: string, processed?: number) => Promise<void>;

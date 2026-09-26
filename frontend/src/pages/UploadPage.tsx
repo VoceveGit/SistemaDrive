@@ -143,8 +143,9 @@ export function UploadPage() {
         <h1 className="text-2xl font-bold text-text-primary">Upload</h1>
         <p className="mt-1 text-sm text-text-secondary">
           Envio manual de planilhas — uma por vez, mesma lógica das soluções codadas (Pedidos: ffill +
-          janela de datas). Planilhas históricas (~60 mil linhas) são pesadas: espere o AUTO do Drive
-          terminar e envie <strong className="font-medium text-text-primary">um arquivo</strong> por vez.
+          janela de datas).           Usa o mesmo fluxo do Drive: <strong className="font-medium text-text-primary">importWorker</strong>{" "}
+          (Processar → staging) e depois Enviar na API. Históricos (~60 mil linhas): espere o AUTO
+          terminar e envie um arquivo por vez.
         </p>
       </div>
 

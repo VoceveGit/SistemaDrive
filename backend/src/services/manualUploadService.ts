@@ -1,37 +1,17 @@
-// Upload manual: planilha local → mesma lógica Pedidos Avinor (staging + DELETE janela + INSERT).
+// Upload manual: mesma solução Pedidos Avinor do Drive (runImport no worker → runCommit na API).
 
 import { randomUUID } from "crypto";
-import { unlink } from "fs/promises";
+import type { Company } from "../../generated/prisma/client.js";
+import type { drive_v3 } from "googleapis";
 import { getCodedSolution } from "../solucoesAvinor/index.js";
 import { AVINOR_PEDIDOS } from "../solucoesAvinor/avinorPedidos.js";
-import { parsePedidosSpreadsheetFromPath } from "../solucoesAvinor/parsePedidos.js";
-import { findColumnIndex } from "../solucoesAvinor/columnMap.js";
-import { listMysqlColumnsOrdered } from "../solucoesAvinor/snapshotMysql.js";
-import { deleteByDateWindow, insertBatchDirect } from "../solucoesAvinor/mysqlDirect.js";
-import {
-  clearStagingJob,
-  ensureStagingTable,
-  forEachStagingBatch,
-  insertStagingBatch,
-} from "./stagingService.js";
+import type { PedidosSummary } from "../solucoesAvinor/types.js";
 import { getAppDbSettings } from "./externalDbService.js";
-
-const BATCH = 400;
-const STAGING_WRITE = 200;
 
 const ALLOWED_TABLES = new Set([
   "pedidos_emissao_avinor",
   "base_pedidos_avinor",
 ]);
-
-const PEDIDOS_DT_DB = [
-  "Dt.Entrega",
-  "Dt Entrega",
-  "Dt.Emissão",
-  "Dt.Emissao",
-  "Dt_Entrega",
-  "Dt_Emissao",
-];
 
 export function listManualUploadTables(): string[] {
   return [...ALLOWED_TABLES];
@@ -50,40 +30,58 @@ export type ManualUploadResult = {
   error?: string;
 };
 
-export async function runManualPedidosUpload(params: {
+/** Resultado IPC do importWorker (--manual): só fase Processar. */
+export type ManualWorkerImportResult = {
+  ok: boolean;
+  jobId?: string;
+  fileName: string;
+  targetTable: string;
+  codedSolutionId: string;
+  importSummary?: PedidosSummary;
+  error?: string;
+};
+
+function stubCompany(targetTable: string): Company {
+  return {
+    id: "manual-upload",
+    targetTable,
+    headerRow: AVINOR_PEDIDOS.headerRow,
+    dataRow: AVINOR_PEDIDOS.dataRow,
+  } as Company;
+}
+
+function validateManualJob(params: {
+  targetTable: string;
+  codedSolutionId: string;
+  fileName: string;
+}): { error?: string } {
+  if (!ALLOWED_TABLES.has(params.targetTable)) {
+    return { error: `Tabela não permitida: ${params.targetTable}` };
+  }
+  const coded = getCodedSolution(params.codedSolutionId);
+  if (!coded || coded.id !== AVINOR_PEDIDOS.id) {
+    return { error: "Solução codada inválida (use Pedidos Avinor)." };
+  }
+  return {};
+}
+
+/** Fase 1 — roda no importWorker (igual Processar do Drive). */
+export async function runManualPedidosImportWorker(params: {
   filePath: string;
   fileName: string;
   targetTable: string;
   codedSolutionId: string;
-  onProgress?: (message: string, pct?: number) => void;
-}): Promise<ManualUploadResult> {
-  const { filePath, fileName, targetTable, codedSolutionId, onProgress } = params;
-
-  if (!ALLOWED_TABLES.has(targetTable)) {
-    return {
-      success: false,
-      fileName,
-      targetTable,
-      codedSolutionId,
-      error: `Tabela não permitida: ${targetTable}`,
-    };
-  }
-
-  const coded = getCodedSolution(codedSolutionId);
-  if (!coded || coded.id !== AVINOR_PEDIDOS.id) {
-    return {
-      success: false,
-      fileName,
-      targetTable,
-      codedSolutionId,
-      error: "Solução codada inválida (use Pedidos Avinor).",
-    };
+}): Promise<ManualWorkerImportResult> {
+  const { filePath, fileName, targetTable, codedSolutionId } = params;
+  const bad = validateManualJob({ targetTable, codedSolutionId, fileName });
+  if (bad.error) {
+    return { ok: false, fileName, targetTable, codedSolutionId, error: bad.error };
   }
 
   const dbSettings = await getAppDbSettings();
   if (!dbSettings) {
     return {
-      success: false,
+      ok: false,
       fileName,
       targetTable,
       codedSolutionId,
@@ -92,92 +90,102 @@ export async function runManualPedidosUpload(params: {
   }
 
   const jobId = `upload-${randomUUID()}`;
-  const companyId = "manual-upload";
+  const company = stubCompany(targetTable);
+  const drive = {} as drive_v3.Drive;
+  const file = { name: fileName } as drive_v3.Schema$File;
 
   try {
-    onProgress?.("Lendo colunas do MySQL...", 5);
-    const columns = await listMysqlColumnsOrdered(dbSettings, targetTable);
-    if (columns.length !== 23) {
+    const result = await AVINOR_PEDIDOS.runImport!({
+      spreadsheetId: jobId,
+      company,
+      drive,
+      file,
+      dbSettings,
+      localFilePath: filePath,
+      onProgress: async (message) => {
+        console.log(`[manualUpload] ${message}`);
+      },
+    });
+
+    const importSummary = result.importSummary;
+    if (!importSummary || importSummary.mode !== "pedidos") {
       return {
-        success: false,
+        ok: false,
         fileName,
         targetTable,
         codedSolutionId,
-        error: `Tabela ${targetTable} tem ${columns.length} colunas; esperado 23 (igual base_pedidos_avinor).`,
+        error: "Import não retornou resumo de pedidos.",
       };
     }
 
-    onProgress?.("Processando planilha (TOTAL → ffill)...", 15);
-    const parsed = await parsePedidosSpreadsheetFromPath({
-      filePath,
-      dbColumns: columns,
-      headerRow: AVINOR_PEDIDOS.headerRow,
-      dataRow: AVINOR_PEDIDOS.dataRow,
-      onProgress: async (msg) => onProgress?.(msg),
+    return {
+      ok: true,
+      jobId,
+      fileName,
+      targetTable,
+      codedSolutionId,
+      importSummary,
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { ok: false, fileName, targetTable, codedSolutionId, error: message };
+  }
+}
+
+/** Fase 2 — na API (igual Enviar / auto-commit do Drive). */
+export async function runManualPedidosCommit(params: {
+  jobId: string;
+  fileName: string;
+  targetTable: string;
+  codedSolutionId: string;
+  importSummary: PedidosSummary;
+}): Promise<ManualUploadResult> {
+  const { jobId, fileName, targetTable, codedSolutionId, importSummary } = params;
+
+  const dbSettings = await getAppDbSettings();
+  if (!dbSettings) {
+    return {
+      success: false,
+      fileName,
+      targetTable,
+      codedSolutionId,
+      error: "Banco EXTRACTOR não configurado.",
+    };
+  }
+
+  const company = stubCompany(targetTable);
+  const drive = {} as drive_v3.Drive;
+  const file = { name: fileName } as drive_v3.Schema$File;
+
+  try {
+    const commit = await AVINOR_PEDIDOS.runCommit!({
+      spreadsheetId: jobId,
+      company,
+      drive,
+      file,
+      dbSettings,
+      previousSummary: importSummary,
+      onProgress: async (message) => {
+        console.log(`[manualUpload] ${message}`);
+      },
     });
 
-    onProgress?.(`Staging: ${parsed.validRows.length} linhas...`, 40);
-    await ensureStagingTable(dbSettings);
-    await clearStagingJob(dbSettings, jobId);
+    const summary = commit.summary;
+    const note = summary.note;
+    const inserted = summary.insertedRowCount;
 
-    for (let i = 0; i < parsed.validRows.length; i += STAGING_WRITE) {
-      const chunk = parsed.validRows.slice(i, i + STAGING_WRITE);
-      await insertStagingBatch({
-        settings: dbSettings,
-        jobId,
-        companyId,
-        startRowNum: i,
-        rows: chunk,
-      });
-    }
-
-    const dtIdx = findColumnIndex(columns.map((c) => c.name), ...PEDIDOS_DT_DB);
-    const dtCol = dtIdx >= 0 ? columns[dtIdx]!.name : "Dt.Entrega";
-
-    onProgress?.(
-      `Apagando janela ${parsed.monthFrom} ≤ data < ${parsed.monthToExclusive}...`,
-      55,
-    );
-    const deletedRows = await deleteByDateWindow({
-      settings: dbSettings,
-      table: targetTable,
-      dtCol,
-      dateFrom: parsed.monthFrom,
-      dateToExclusive: parsed.monthToExclusive,
-    });
-
-    onProgress?.("Inserindo no MySQL...", 70);
-    let insertedRowCount = 0;
-    const total = parsed.validRows.length;
-    await forEachStagingBatch(dbSettings, jobId, BATCH, async (rows) => {
-      insertedRowCount += await insertBatchDirect({
-        settings: dbSettings,
-        table: targetTable,
-        columns,
-        sheetRows: rows,
-      });
-      const pct = 70 + Math.min(25, Math.round((insertedRowCount / total) * 25));
-      onProgress?.(`Inseridas ${insertedRowCount}/${total}...`, pct);
-    });
-
-    await clearStagingJob(dbSettings, jobId);
-
-    const note =
-      `Upload OK: janela ${parsed.monthFrom} → ${parsed.monthToExclusive} ` +
-      `(apagou ${deletedRows}, inseriu ${insertedRowCount}). ` +
-      `Datas ${parsed.dateMin} … ${parsed.dateMax}.`;
-
-    onProgress?.("Concluído.", 100);
+    const deletedMatch = note.match(/apagou (\d+)/i);
+    const deletedRows = deletedMatch ? Number(deletedMatch[1]) : undefined;
 
     return {
       success: true,
       fileName,
       targetTable,
       codedSolutionId,
-      insertedRowCount,
+      insertedRowCount: inserted,
       deletedRows,
-      monthFrom: parsed.monthFrom,
-      monthToExclusive: parsed.monthToExclusive,
+      monthFrom: importSummary.monthFrom,
+      monthToExclusive: importSummary.monthToExclusive,
       note,
     };
   } catch (e) {
@@ -189,7 +197,5 @@ export async function runManualPedidosUpload(params: {
       codedSolutionId,
       error: message,
     };
-  } finally {
-    await unlink(filePath).catch(() => undefined);
   }
 }

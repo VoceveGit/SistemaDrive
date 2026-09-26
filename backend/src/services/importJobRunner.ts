@@ -13,7 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const queue: string[] = [];
 let active: { spreadsheetId: string; child: ChildProcess } | null = null;
 
-function resolveWorker(): { modulePath: string; execArgv: string[] } {
+export function resolveImportWorkerModule(): { modulePath: string; execArgv: string[] } {
   const js = path.join(__dirname, "../workers/importWorker.js");
   const ts = path.join(__dirname, "../workers/importWorker.ts");
   // Produção (tsc) ou build local
@@ -146,7 +146,7 @@ async function pump(): Promise<void> {
     })
     .catch(() => undefined);
 
-  const { modulePath, execArgv } = resolveWorker();
+  const { modulePath, execArgv } = resolveImportWorkerModule();
   console.log(`[importJob] fork ${spreadsheetId} → ${path.basename(modulePath)}`);
 
   const child = fork(modulePath, [spreadsheetId], {
