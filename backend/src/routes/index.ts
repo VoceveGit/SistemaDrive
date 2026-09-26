@@ -41,11 +41,25 @@ import {
   postUploadSpreadsheet,
 } from "../controllers/uploadController.js";
 import multer from "multer";
+import { mkdirSync } from "fs";
+import { randomUUID } from "crypto";
+import { tmpdir } from "os";
+import path from "path";
 
 const router = Router();
 
+const multipartDir = path.join(tmpdir(), "despacho-multipart");
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      mkdirSync(multipartDir, { recursive: true });
+      cb(null, multipartDir);
+    },
+    filename: (_req, file, cb) => {
+      const base = path.basename(file.originalname || "planilha.xlsx");
+      cb(null, `${randomUUID()}-${base}`);
+    },
+  }),
   limits: { fileSize: 80 * 1024 * 1024 },
 });
 

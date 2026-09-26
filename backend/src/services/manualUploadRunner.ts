@@ -5,6 +5,7 @@ import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import type { ManualUploadResult } from "./manualUploadService.js";
+import { waitForImportJobIdle } from "./importJobRunner.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,7 +14,8 @@ let activeChild: ChildProcess | null = null;
 function resolveManualUploadWorker(): { modulePath: string; execArgv: string[] } {
   const js = path.join(__dirname, "../workers/manualUploadWorker.js");
   const ts = path.join(__dirname, "../workers/manualUploadWorker.ts");
-  const heap = ["--max-old-space-size=420"];
+  // Mesmo teto do importWorker — 420MB filho + API estourava RAM do Starter.
+  const heap = ["--max-old-space-size=300"];
   if (existsSync(js)) {
     return { modulePath: js, execArgv: heap };
   }
@@ -35,7 +37,7 @@ export function isManualUploadBusy(): boolean {
 }
 
 /** Roda upload no worker; API permanece leve para /health e estáticos. */
-export function runManualPedidosUploadIsolated(
+export async function runManualPedidosUploadIsolated(
   params: ManualUploadJobParams,
 ): Promise<ManualUploadResult> {
   if (activeChild) {
@@ -46,6 +48,18 @@ export function runManualPedidosUploadIsolated(
       codedSolutionId: params.codedSolutionId,
       error: "Outro upload em andamento. Aguarde terminar (um arquivo por vez).",
     });
+  }
+
+  const idle = await waitForImportJobIdle();
+  if (!idle) {
+    return {
+      success: false,
+      fileName: params.fileName,
+      targetTable: params.targetTable,
+      codedSolutionId: params.codedSolutionId,
+      error:
+        "O processamento automático do Drive ainda está rodando. Espere 2–5 min (fila vazia) e envie de novo — um arquivo por vez.",
+    };
   }
 
   const { modulePath, execArgv } = resolveManualUploadWorker();

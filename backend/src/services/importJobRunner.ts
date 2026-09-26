@@ -112,6 +112,25 @@ export function getImportJobStatus(): {
   };
 }
 
+export function isImportJobBusy(): boolean {
+  return active !== null || queue.length > 0;
+}
+
+/** Upload manual pesado: não competir com worker do Drive na mesma RAM (Render ~512MB). */
+export async function waitForImportJobIdle(options?: {
+  timeoutMs?: number;
+  pollMs?: number;
+}): Promise<boolean> {
+  const timeoutMs = options?.timeoutMs ?? 20 * 60_000;
+  const pollMs = options?.pollMs ?? 2500;
+  const start = Date.now();
+  while (isImportJobBusy()) {
+    if (Date.now() - start > timeoutMs) return false;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return true;
+}
+
 async function pump(): Promise<void> {
   if (active) return;
   const spreadsheetId = queue.shift();

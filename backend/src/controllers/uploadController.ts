@@ -1,16 +1,15 @@
 // backend/src/controllers/uploadController.ts
 
 import type { Request, Response } from "express";
-import { writeFile, mkdtemp } from "fs/promises";
+import { unlink } from "fs/promises";
 import path from "path";
-import { tmpdir } from "os";
 import { listCodedSolutions } from "../solucoesAvinor/index.js";
 import { listManualUploadTables } from "../services/manualUploadService.js";
 import { runManualPedidosUploadIsolated } from "../services/manualUploadRunner.js";
 
 const UPLOAD_SOLUTION_IDS = new Set(["avinor_pedidos"]);
 
-/** Multipart (multer memory) — tipagem explícita para build sem augment global. */
+/** Multipart (multer disk) — tipagem explícita para build sem augment global. */
 type UploadSpreadsheetRequest = Request & {
   file?: Express.Multer.File;
 };
@@ -32,7 +31,7 @@ export async function postUploadSpreadsheet(
   const targetTable = String(req.body?.targetTable ?? "").trim();
   const codedSolutionId = String(req.body?.codedSolutionId ?? "").trim();
 
-  if (!file?.buffer?.length) {
+  if (!file?.path) {
     res.status(400).json({ success: false, error: "Envie um arquivo .xlsx" });
     return;
   }
@@ -45,21 +44,23 @@ export async function postUploadSpreadsheet(
   }
 
   const safeName = path.basename(file.originalname || "planilha.xlsx");
-  const dir = await mkdtemp(path.join(tmpdir(), "despacho-upload-"));
-  const filePath = path.join(dir, safeName);
-  await writeFile(filePath, file.buffer);
+  const filePath = file.path;
 
-  const result = await runManualPedidosUploadIsolated({
-    filePath,
-    fileName: safeName,
-    targetTable,
-    codedSolutionId,
-  });
+  try {
+    const result = await runManualPedidosUploadIsolated({
+      filePath,
+      fileName: safeName,
+      targetTable,
+      codedSolutionId,
+    });
 
-  if (!result.success) {
-    res.status(500).json(result);
-    return;
+    if (!result.success) {
+      res.status(500).json(result);
+      return;
+    }
+
+    res.json(result);
+  } finally {
+    await unlink(filePath).catch(() => undefined);
   }
-
-  res.json(result);
 }
