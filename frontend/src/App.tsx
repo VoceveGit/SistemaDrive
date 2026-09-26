@@ -9,6 +9,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { CompaniesPage } from "./pages/CompaniesPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { UploadPage } from "./pages/UploadPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,6 +50,7 @@ export default function App() {
             <Route path="dashboard" element={<DashboardPage />} />
             <Route path="companies" element={<CompaniesPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="upload" element={<UploadPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -1,13 +1,14 @@
 // frontend/src/components/layout/Sidebar.tsx
 
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Building2, Settings, ChevronLeft, ChevronRight } from "lucide-react";
+import { LayoutDashboard, Building2, Settings, Upload, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useState } from "react";
 
 const items = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/companies", label: "Empresas", icon: Building2 },
+  { to: "/upload", label: "Upload", icon: Upload },
   { to: "/settings", label: "Configurações", icon: Settings },
 ];
 

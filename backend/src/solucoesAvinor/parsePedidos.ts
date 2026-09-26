@@ -68,35 +68,40 @@ export function pedidosMonthWindowFromDates(dates: Date[]): {
   return { from, toExclusive };
 }
 
-export async function parsePedidosSpreadsheet(params: {
-  drive: drive_v3.Drive;
-  file: drive_v3.Schema$File;
+const PEDIDOS_DT_HEADERS = [
+  "Dt.Entrega",
+  "Dt Entrega",
+  "Dt.Emissão",
+  "Dt.Emissao",
+  "Data Entrega",
+];
+
+/** Lê arquivo local (upload manual ou após download do Drive). */
+export async function parsePedidosSpreadsheetFromPath(params: {
+  filePath: string;
   dbColumns: MysqlColMeta[];
   headerRow: number;
   dataRow: number;
   onProgress?: (msg: string, n?: number) => Promise<void>;
 }): Promise<PedidosParseResult> {
-  const { drive, file, dbColumns, headerRow, dataRow, onProgress } = params;
-  let tmpPath: string | null = null;
+  const { filePath, dbColumns, headerRow, dataRow, onProgress } = params;
 
-  try {
-    tmpPath = await downloadDriveFileToTemp(drive, file);
-    await onProgress?.("Pedidos Avinor: baixando e lendo...");
+  await onProgress?.("Pedidos Avinor: lendo planilha...");
 
-    const loaded = await loadAvinorXlsx({
-      filePath: tmpPath,
-      headerRow,
-      dataRow,
-      skipFooter: SKIP_FOOTER_ROWS,
-      onProgress,
-    });
+  const loaded = await loadAvinorXlsx({
+    filePath,
+    headerRow,
+    dataRow,
+    skipFooter: SKIP_FOOTER_ROWS,
+    onProgress,
+  });
 
     const sheetHeaders = dedupeHeadersPandasStyle(loaded.headers);
     const linesRead = loaded.rows.length;
 
     const descIdx = findColumnIndex(sheetHeaders, "Descrição", "Descricao");
     const pedidoIdxSheet = findColumnIndex(sheetHeaders, "Pedido");
-    const dtIdxSheet = findColumnIndex(sheetHeaders, "Dt.Entrega", "Dt Entrega");
+    const dtIdxSheet = findColumnIndex(sheetHeaders, ...PEDIDOS_DT_HEADERS);
 
     if (descIdx < 0) {
       throw new Error('Coluna "Descrição" não encontrada no cabeçalho.');
@@ -105,7 +110,7 @@ export async function parsePedidosSpreadsheet(params: {
       throw new Error('Coluna "Pedido" não encontrada no cabeçalho.');
     }
     if (dtIdxSheet < 0) {
-      throw new Error('Coluna "Dt.Entrega" não encontrada no cabeçalho.');
+      throw new Error('Coluna de data (Dt.Entrega / Dt.Emissão) não encontrada no cabeçalho.');
     }
 
     let ignoredTotal = 0;
@@ -148,7 +153,7 @@ export async function parsePedidosSpreadsheet(params: {
     }
     if (sheetDatesOk === 0) {
       throw new Error(
-        `Nenhuma Dt.Entrega válida na planilha (amostra col. planilha: ${
+        `Nenhuma data válida na planilha (Dt.Entrega/Dt.Emissão; amostra: ${
           sheetDateSamples.length
             ? sheetDateSamples.map((s) => `"${s}"`).join(" | ")
             : '"" | "" | ""'
@@ -175,10 +180,10 @@ export async function parsePedidosSpreadsheet(params: {
       }
     }
 
-    const dtColIdx = findColumnIndex(mapped.headers, "Dt.Entrega", "Dt Entrega");
+    const dtColIdx = findColumnIndex(mapped.headers, ...PEDIDOS_DT_HEADERS);
     const pedidoColIdx = findColumnIndex(mapped.headers, "Pedido");
     if (dtColIdx < 0 || pedidoColIdx < 0) {
-      throw new Error("Após mapear, Dt.Entrega ou Pedido não encontrados nas cols do MySQL.");
+      throw new Error("Após mapear, coluna de data ou Pedido não encontrados nas cols do MySQL.");
     }
 
     // Se o map esvaziou a coluna de data, copia da planilha (mesma ordem de linhas)
@@ -207,7 +212,7 @@ export async function parsePedidosSpreadsheet(params: {
 
     if (dates.length === 0) {
       throw new Error(
-        `Nenhuma Dt.Entrega válida após mapear (amostra planilha: ${sheetDateSamples
+        `Nenhuma data válida após mapear (amostra planilha: ${sheetDateSamples
           .map((s) => `"${s}"`)
           .join(" | ")}).`,
       );
@@ -239,6 +244,29 @@ export async function parsePedidosSpreadsheet(params: {
       dateMax: fmtBr(maxD),
       sampleDates: dateLabels.length ? dateLabels : [fmtBr(minD), fmtBr(maxD)],
     };
+}
+
+export async function parsePedidosSpreadsheet(params: {
+  drive: drive_v3.Drive;
+  file: drive_v3.Schema$File;
+  dbColumns: MysqlColMeta[];
+  headerRow: number;
+  dataRow: number;
+  onProgress?: (msg: string, n?: number) => Promise<void>;
+}): Promise<PedidosParseResult> {
+  const { drive, file, dbColumns, headerRow, dataRow, onProgress } = params;
+  let tmpPath: string | null = null;
+
+  try {
+    tmpPath = await downloadDriveFileToTemp(drive, file);
+    await onProgress?.("Pedidos Avinor: baixando...");
+    return await parsePedidosSpreadsheetFromPath({
+      filePath: tmpPath,
+      dbColumns,
+      headerRow,
+      dataRow,
+      onProgress,
+    });
   } finally {
     await safeUnlink(tmpPath);
   }

@@ -177,7 +177,15 @@ const ESTOQUE_ALIASES: Record<string, string[]> = {
 const PEDIDOS_ALIASES: Record<string, string[]> = {
   Emp: ["Emp"],
   Uni: ["Uni"],
-  "Dt.Entrega": ["Dt.Entrega", "Dt Entrega", "Data Entrega"],
+  "Dt.Entrega": [
+    "Dt.Entrega",
+    "Dt Entrega",
+    "Data Entrega",
+    "Dt.Emissão",
+    "Dt.Emissao",
+    "Dt Emissão",
+    "Dt Emissao",
+  ],
   Pedido: ["Pedido"],
   Status: ["Status"],
   "Cond. Pagto": ["Cond. Pagto", "Cond Pagto", "Cond. Pagamento"],

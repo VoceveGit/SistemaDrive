@@ -135,6 +135,10 @@ async function runCommit(ctx: CodedSolutionContext): Promise<CodedSolutionCommit
     columns.map((c) => c.name),
     "Dt.Entrega",
     "Dt Entrega",
+    "Dt.Emissão",
+    "Dt.Emissao",
+    "Dt_Entrega",
+    "Dt_Emissao",
   );
   const dtCol = dtIdx >= 0 ? columns[dtIdx]!.name : "Dt.Entrega";
 

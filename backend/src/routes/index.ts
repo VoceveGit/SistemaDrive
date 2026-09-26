@@ -36,8 +36,18 @@ import {
   processSpreadsheet,
 } from "../controllers/spreadsheetsController.js";
 import { getStats, getConnectionStatus } from "../controllers/dashboardController.js";
+import {
+  getUploadOptions,
+  postUploadSpreadsheet,
+} from "../controllers/uploadController.js";
+import multer from "multer";
 
 const router = Router();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 80 * 1024 * 1024 },
+});
 
 router.get("/health", (_req, res) => {
   res.json({ success: true, status: "ok", ts: new Date().toISOString() });
@@ -62,6 +72,9 @@ router.post("/settings/google/disconnect", googleDisconnect);
 
 router.get("/dashboard/stats", getStats);
 router.get("/dashboard/connection", getConnectionStatus);
+
+router.get("/upload/options", getUploadOptions);
+router.post("/upload/spreadsheet", upload.single("file"), postUploadSpreadsheet);
 
 router.get("/companies", listCompanies);
 router.get("/companies/all", listAllCompanies);
