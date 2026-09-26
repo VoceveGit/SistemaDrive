@@ -12,6 +12,11 @@ import {
 
 const UPLOAD_SOLUTION_IDS = new Set(["avinor_pedidos"]);
 
+/** Multipart (multer memory) — tipagem explícita para build sem augment global. */
+type UploadSpreadsheetRequest = Request & {
+  file?: Express.Multer.File;
+};
+
 export async function getUploadOptions(_req: Request, res: Response): Promise<void> {
   const solutions = listCodedSolutions().filter((s) => UPLOAD_SOLUTION_IDS.has(s.id));
   res.json({
@@ -21,7 +26,10 @@ export async function getUploadOptions(_req: Request, res: Response): Promise<vo
   });
 }
 
-export async function postUploadSpreadsheet(req: Request, res: Response): Promise<void> {
+export async function postUploadSpreadsheet(
+  req: UploadSpreadsheetRequest,
+  res: Response,
+): Promise<void> {
   const file = req.file;
   const targetTable = String(req.body?.targetTable ?? "").trim();
   const codedSolutionId = String(req.body?.codedSolutionId ?? "").trim();
