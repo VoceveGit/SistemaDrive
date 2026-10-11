@@ -66,6 +66,8 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
       skipFooter: 0,
       expectedHeaderTitles: ESTOQUE_SHEET_TITLES,
       headerScanMaxRow: 50,
+      requiredHeaderMarkers: ["Código", "Codigo", "Cod"],
+      headerMarkers: ["Código", "Codigo", "Descrição Produto", "Descricao Produto"],
       onProgress: ctx.onProgress,
     });
 

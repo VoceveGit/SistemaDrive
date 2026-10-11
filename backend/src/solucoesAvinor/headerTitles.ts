@@ -69,6 +69,8 @@ export const FATURAMENTO_SHEET_TITLES = [
 
 /** Sinônimos leves título esperado ↔ célula (além do headerMatchKey). */
 const TITLE_EQUIV: Record<string, string[]> = {
+  codigo: ["cod", "codproduto", "codprod", "codigoproduto"],
+  descricaoproduto: ["descricaoprod", "descproduto", "produto"],
   tipodecliente: ["tipocliente", "tpcliente"],
   rotacliente: ["rotacadcliente"],
   rotapedido: ["rotagravpedido"],

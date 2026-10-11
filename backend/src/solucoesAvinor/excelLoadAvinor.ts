@@ -217,6 +217,8 @@ export async function loadAvinorXlsx(params: {
   headerScanMaxRow?: number;
   /** Ex.: ["numero","Número"] — se a linha preferida não tiver, sonda as seguintes. */
   headerMarkers?: string[];
+  /** Cabeçalho precisa ter pelo menos um destes (ex.: Código no estoque). */
+  requiredHeaderMarkers?: string[];
   /** Quantas linhas além da preferida tentar (legado; default 4). */
   headerProbeExtra?: number;
   onProgress?: (msg: string, n?: number) => Promise<void>;
@@ -224,9 +226,14 @@ export async function loadAvinorXlsx(params: {
   const { filePath, headerRow, dataRow, sheetName, onProgress } = params;
   const skipFooter = params.skipFooter ?? 0;
   const markers = params.headerMarkers ?? [];
-  const probeExtra = params.headerProbeExtra ?? (markers.length ? 4 : 0);
+  const requiredMarkers = params.requiredHeaderMarkers ?? [];
+  const markerSet = [...requiredMarkers, ...markers];
+  const probeExtra = params.headerProbeExtra ?? (markerSet.length ? 4 : 0);
   const expectedTitles = params.expectedHeaderTitles ?? [];
   const scanMax = params.headerScanMaxRow ?? 50;
+
+  const headerRowValid = (cells: string[]) =>
+    markerSet.length === 0 || headerLooksValid(cells, markerSet);
 
   await onProgress?.("Lendo planilha...");
   const buffer = await readFile(filePath);
@@ -270,6 +277,7 @@ export async function loadAvinorXlsx(params: {
       if (candidate.length === 0) continue;
       const score = scoreHeaderRowAgainstTitles(candidate, expectedTitles);
       if (!isGoodHeaderListMatch(score)) continue;
+      if (!headerRowValid(candidate)) continue;
       // Prefere mais matches; empate → linha mais cedo (já naturalmente)
       if (score.matched > bestMatched) {
         bestMatched = score.matched;
@@ -288,15 +296,64 @@ export async function loadAvinorXlsx(params: {
     }
   }
 
+  // 1b) Lista não passou no limiar: entre linhas com marcador (Código…), pega a que mais casa com a lista
+  if (!foundByList && markerSet.length > 0 && expectedTitles.length > 0) {
+    const end = Math.min(scanMax, range.e.r + 1);
+    let markerBestRow = -1;
+    let markerBestMatched = -1;
+    let markerBestHeaders: string[] = [];
+
+    await onProgress?.(
+      `Refinando cabeçalho (marcador + lista) nas linhas 1–${end}...`,
+    );
+
+    for (let tryRow = 1; tryRow <= end; tryRow++) {
+      const candidate = readHeaderCells(sheet, range, tryRow - 1);
+      if (!headerRowValid(candidate)) continue;
+      const score = scoreHeaderRowAgainstTitles(candidate, expectedTitles);
+      if (score.matched > markerBestMatched) {
+        markerBestMatched = score.matched;
+        markerBestRow = tryRow;
+        markerBestHeaders = candidate;
+      }
+    }
+
+    if (markerBestRow > 0 && markerBestMatched >= 3) {
+      resolvedHeaderRow = markerBestRow;
+      headers = markerBestHeaders;
+      foundByList = true;
+      await onProgress?.(
+        `Cabeçalho achado na linha ${markerBestRow} (${markerBestMatched}/${expectedTitles.length} títulos, com ${markerSet[0]}).`,
+      );
+    }
+  }
+
+  // 1c) Sem lista oficial: primeira linha com marcador
+  if (!foundByList && markerSet.length > 0) {
+    const end = Math.min(scanMax, range.e.r + 1);
+    await onProgress?.(
+      `Procurando marcadores nas linhas 1–${end}...`,
+    );
+    for (let tryRow = 1; tryRow <= end; tryRow++) {
+      const candidate = readHeaderCells(sheet, range, tryRow - 1);
+      if (!headerRowValid(candidate)) continue;
+      resolvedHeaderRow = tryRow;
+      headers = candidate;
+      foundByList = true;
+      await onProgress?.(`Cabeçalho achado na linha ${tryRow} (marcadores).`);
+      break;
+    }
+  }
+
   // 2) Fallback legado: markers + janela a partir de headerRow
-  if (!foundByList && (markers.length > 0 || headers.length === 0)) {
+  if (!foundByList && (markerSet.length > 0 || headers.length === 0)) {
     const start = Math.max(headerRow, 1);
     const end = Math.min(start + probeExtra, range.e.r + 1);
-    let found = headerLooksValid(headers, markers);
+    let found = headerRowValid(headers);
     if (!found) {
       for (let tryRow = start; tryRow <= end; tryRow++) {
         const candidate = readHeaderCells(sheet, range, tryRow - 1);
-        if (headerLooksValid(candidate, markers)) {
+        if (headerRowValid(candidate)) {
           resolvedHeaderRow = tryRow;
           headers = candidate;
           found = true;
@@ -316,12 +373,19 @@ export async function loadAvinorXlsx(params: {
           (probeExtra > 0 ? ` (também tentei até a ${end})` : ""),
       );
     }
-    if (!found && markers.length > 0) {
+    if (!found && markerSet.length > 0) {
       throw new Error(
-        `Não achei cabeçalho com ${markers[0]} nas linhas ${start}–${end}. ` +
+        `Não achei cabeçalho com ${markerSet[0]} nas linhas ${start}–${end}. ` +
           `Confira se os títulos mudaram de lugar de novo.`,
       );
     }
+  }
+
+  if (expectedTitles.length > 0 && !headerRowValid(headers)) {
+    throw new Error(
+      `Não achei a linha de títulos (lista oficial, ${expectedTitles.length} cols) até a linha ${Math.min(scanMax, range.e.r + 1)}. ` +
+        `Confira se os títulos mudaram de nome.`,
+    );
   }
 
   if (headers.length === 0) {
