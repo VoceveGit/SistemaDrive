@@ -2,6 +2,8 @@
 // Snapshot estoque_avinor: DELETE tudo + INSERT planilha.
 // Cabeçalho: lista oficial de títulos (busca linha a linha até L50). Ignora Totais.
 
+import { readFile } from "fs/promises";
+import * as XLSX from "xlsx";
 import { downloadDriveFileToTemp, safeUnlink } from "../services/streamSheetService.js";
 import type {
   CodedSolution,
@@ -18,7 +20,7 @@ import {
 } from "./snapshotMysql.js";
 import {
   dedupeHeadersPandasStyle,
-  findColumnIndex,
+  findEstoqueCodigoColumn,
   mapRowsToDbColumnOrder,
 } from "./columnMap.js";
 import { loadAvinorXlsx } from "./excelLoadAvinor.js";
@@ -59,30 +61,49 @@ async function runImport(ctx: CodedSolutionContext): Promise<CodedSolutionRunRes
     tmpPath = await downloadDriveFileToTemp(ctx.drive, ctx.file);
 
     await ctx.onProgress?.("Avinor Estoque: localizando títulos na planilha...");
-    const loaded = await loadAvinorXlsx({
-      filePath: tmpPath,
-      headerRow: AVINOR_ESTOQUE.headerRow,
-      dataRow: AVINOR_ESTOQUE.dataRow,
-      skipFooter: 0,
-      expectedHeaderTitles: ESTOQUE_SHEET_TITLES,
-      headerScanMaxRow: 50,
-      requiredHeaderMarkers: ["Código", "Codigo", "Cod"],
-      headerMarkers: ["Código", "Codigo", "Descrição Produto", "Descricao Produto"],
-      onProgress: ctx.onProgress,
-    });
+    const buffer = await readFile(tmpPath);
+    const workbook = XLSX.read(buffer, { type: "buffer" });
+    const sheetNames = workbook.SheetNames.length
+      ? workbook.SheetNames
+      : [undefined];
+
+    let loaded: Awaited<ReturnType<typeof loadAvinorXlsx>> | null = null;
+    let lastLoadError = "Nenhuma aba com cabeçalho de estoque (coluna Código).";
+
+    for (const sheetName of sheetNames) {
+      try {
+        loaded = await loadAvinorXlsx({
+          filePath: tmpPath,
+          sheetName: sheetName ?? null,
+          headerRow: AVINOR_ESTOQUE.headerRow,
+          dataRow: AVINOR_ESTOQUE.dataRow,
+          skipFooter: 0,
+          expectedHeaderTitles: ESTOQUE_SHEET_TITLES,
+          headerScanMaxRow: 50,
+          validateHeaderRow: (row) => findEstoqueCodigoColumn(row) >= 0,
+          onProgress: ctx.onProgress,
+        });
+        if (sheetName) {
+          await ctx.onProgress?.(`Aba usada: "${sheetName}".`);
+        }
+        break;
+      } catch (e) {
+        lastLoadError =
+          e instanceof Error ? e.message : String(e);
+      }
+    }
+
+    if (!loaded) {
+      throw new Error(lastLoadError);
+    }
 
     const sheetHeaders = dedupeHeadersPandasStyle(loaded.headers);
-    const codigoIdx = findColumnIndex(
-      sheetHeaders,
-      "codigo",
-      "Código",
-      "Codigo",
-      "Cód",
-      "Cod",
-    );
+    const codigoIdx = findEstoqueCodigoColumn(loaded.headers);
     if (codigoIdx < 0) {
+      const hint = sheetHeaders.filter(Boolean).slice(0, 10).join(" | ");
       throw new Error(
-        `Coluna "Código" não encontrada no cabeçalho (linha ${loaded.headerRowUsed}).`,
+        `Coluna "Código" não encontrada no cabeçalho (linha ${loaded.headerRowUsed}).` +
+          (hint ? ` Títulos lidos: ${hint}` : ""),
       );
     }
 

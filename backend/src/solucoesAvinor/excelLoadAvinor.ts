@@ -219,6 +219,8 @@ export async function loadAvinorXlsx(params: {
   headerMarkers?: string[];
   /** Cabeçalho precisa ter pelo menos um destes (ex.: Código no estoque). */
   requiredHeaderMarkers?: string[];
+  /** Validação forte (ex.: coluna Código resolvível) — substitui só marcador curto "Cod". */
+  validateHeaderRow?: (headers: string[]) => boolean;
   /** Quantas linhas além da preferida tentar (legado; default 4). */
   headerProbeExtra?: number;
   onProgress?: (msg: string, n?: number) => Promise<void>;
@@ -232,8 +234,11 @@ export async function loadAvinorXlsx(params: {
   const expectedTitles = params.expectedHeaderTitles ?? [];
   const scanMax = params.headerScanMaxRow ?? 50;
 
-  const headerRowValid = (cells: string[]) =>
-    markerSet.length === 0 || headerLooksValid(cells, markerSet);
+  const validateRow = params.validateHeaderRow;
+  const headerRowValid = (cells: string[]) => {
+    if (validateRow) return validateRow(cells);
+    return markerSet.length === 0 || headerLooksValid(cells, markerSet);
+  };
 
   await onProgress?.("Lendo planilha...");
   const buffer = await readFile(filePath);
@@ -318,7 +323,8 @@ export async function loadAvinorXlsx(params: {
       }
     }
 
-    if (markerBestRow > 0 && markerBestMatched >= 3) {
+    const minMarkerScore = validateRow ? 1 : 3;
+    if (markerBestRow > 0 && markerBestMatched >= minMarkerScore) {
       resolvedHeaderRow = markerBestRow;
       headers = markerBestHeaders;
       foundByList = true;
@@ -328,8 +334,42 @@ export async function loadAvinorXlsx(params: {
     }
   }
 
-  // 1c) Sem lista oficial: primeira linha com marcador
-  if (!foundByList && markerSet.length > 0) {
+  // 1c) Validação forte: melhor linha que passa validateHeaderRow (sem “Cod” solto na L1)
+  if (!foundByList && validateRow) {
+    const end = Math.min(scanMax, range.e.r + 1);
+    let bestRow = -1;
+    let bestMatched = -1;
+    let bestHeaders: string[] = [];
+
+    await onProgress?.(
+      `Procurando linha com coluna Código nas linhas 1–${end}...`,
+    );
+
+    for (let tryRow = 1; tryRow <= end; tryRow++) {
+      const candidate = readHeaderCells(sheet, range, tryRow - 1);
+      if (!headerRowValid(candidate)) continue;
+      const score = expectedTitles.length
+        ? scoreHeaderRowAgainstTitles(candidate, expectedTitles).matched
+        : 1;
+      if (score > bestMatched) {
+        bestMatched = score;
+        bestRow = tryRow;
+        bestHeaders = candidate;
+      }
+    }
+
+    if (bestRow > 0) {
+      resolvedHeaderRow = bestRow;
+      headers = bestHeaders;
+      foundByList = true;
+      await onProgress?.(
+        `Cabeçalho achado na linha ${bestRow} (coluna Código, ${bestMatched}/${expectedTitles.length || "?"} títulos).`,
+      );
+    }
+  }
+
+  // 1d) Sem validateHeaderRow: primeira linha com marcador
+  if (!foundByList && !validateRow && markerSet.length > 0) {
     const end = Math.min(scanMax, range.e.r + 1);
     await onProgress?.(
       `Procurando marcadores nas linhas 1–${end}...`,
@@ -381,10 +421,17 @@ export async function loadAvinorXlsx(params: {
     }
   }
 
-  if (expectedTitles.length > 0 && !headerRowValid(headers)) {
+  if (!headerRowValid(headers)) {
+    const hint = headers
+      .map((h) => sanitizeExcelText(h))
+      .filter(Boolean)
+      .slice(0, 8)
+      .join(" | ");
     throw new Error(
-      `Não achei a linha de títulos (lista oficial, ${expectedTitles.length} cols) até a linha ${Math.min(scanMax, range.e.r + 1)}. ` +
-        `Confira se os títulos mudaram de nome.`,
+      `Não achei a linha de títulos até a linha ${Math.min(scanMax, range.e.r + 1)}` +
+        (expectedTitles.length ? ` (lista ${expectedTitles.length} cols)` : "") +
+        `. Confira se os títulos mudaram.` +
+        (hint ? ` Última linha testada (L${resolvedHeaderRow}): ${hint}` : ""),
     );
   }
 

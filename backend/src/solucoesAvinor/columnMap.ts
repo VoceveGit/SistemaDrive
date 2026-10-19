@@ -173,6 +173,32 @@ const ESTOQUE_ALIASES: Record<string, string[]> = {
   ],
 };
 
+/** Coluna Código no cabeçalho Estoque (mesma lógica do mapeamento MySQL). */
+export function findEstoqueCodigoColumn(headers: string[]): number {
+  const deduped = dedupeHeadersPandasStyle(headers);
+  const idx = findColumnIndex(
+    deduped,
+    "codigo",
+    ...ESTOQUE_ALIASES.codigo,
+    "Cod. Produto",
+    "Cod Produto",
+    "Cod.Produto",
+    "Cód.Produto",
+    "Cod Item",
+    "Cod. Item",
+    "Item",
+  );
+  if (idx >= 0) return idx;
+
+  for (let i = 0; i < deduped.length; i++) {
+    const k = headerMatchKey(deduped[i] ?? "");
+    if (!k) continue;
+    if (k === "codigo" || k === "cod") return i;
+    if (k.startsWith("cod") && k.length <= 14 && !k.startsWith("cond")) return i;
+  }
+  return -1;
+}
+
 /** Pedidos: MySQL tem Quant._x000D_\\nPedida — planilha vem "Quant. Pedida" etc. */
 const PEDIDOS_ALIASES: Record<string, string[]> = {
   Emp: ["Emp"],
